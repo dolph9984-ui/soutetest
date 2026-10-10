@@ -75,9 +75,19 @@ export function useFileUrl(f?: StoredFile, withStatus?: true) {
 export async function downloadFile(f: StoredFile) {
   const blob = await getBlob(f);
   if (!blob) return;
+  const safeName = f.name
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[.-]+|[.-]+$/g, '') || 'document';
+  const extension =
+    f.type?.toLowerCase().startsWith('application/pdf') && !/\.pdf$/i.test(safeName)
+      ? '.pdf'
+      : '';
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = f.name;
+  a.download = safeName + extension;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }

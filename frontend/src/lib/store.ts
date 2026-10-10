@@ -5,12 +5,33 @@
    AUTHENTIFICATION : jeton Sanctum délivré par l'API (services/adminService).
    ========================================================================== */
 
-import { ContactMessage, ContactPayload, Land, Reservation, ReservationPayload, RequestStatus } from '../types';
+import { ContactMessage, Land } from '../types';
 
-export type { ContactMessage, ContactPayload, Reservation, ReservationPayload, RequestStatus } from '../types';
+export type {
+  ContactMessage,
+  ContactPayload,
+  RequestStatus,
+  Reservation,
+  ReservationPayload,
+} from '../types';
 
-import { saveLandApi, deleteApi, updateMessageApi, resetLandsApi, login as apiLogin, logout as apiLogout, isLoggedIn, ApiError } from '../services/adminService';
-import { cache, upsertSync, replaceSync, removeSync } from '../admin/crm/sync';
+import {
+  cache,
+  removeSync,
+  replaceSync,
+  upsertSync,
+  warnSyncFailed,
+} from '../admin/crm/sync';
+import {
+  ApiError,
+  login as apiLogin,
+  logout as apiLogout,
+  deleteApi,
+  isLoggedIn,
+  resetLandsApi,
+  saveLandApi,
+  updateMessageApi,
+} from '../services/adminService';
 
 export function newId(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
@@ -32,6 +53,7 @@ export async function saveLand(land: Land): Promise<Land> {
     else replaceSync('lands', server.id, server);
     return server;
   } catch {
+    warnSyncFailed(`Terrain ${temp.title}`);
     return temp;
   }
 }
@@ -55,16 +77,19 @@ export function getMessages(): ContactMessage[] {
   return cache.messages;
 }
 
-export function updateMessage(id: string, patch: Partial<ContactMessage>): void {
-  const list = cache.messages;
-  const i = list.findIndex((m) => m.id === id);
-  if (i >= 0) list[i] = { ...list[i], ...patch };
-  updateMessageApi(id, { status: patch.status }).catch(() => {});
+export async function updateMessage(
+  id: string,
+  patch: Partial<ContactMessage>,
+): Promise<void> {
+  const current = cache.messages.find((m) => m.id === id);
+  if (!current) return;
+  await updateMessageApi(id, { status: patch.status });
+  upsertSync('messages', { ...current, ...patch });
 }
 
-export function deleteMessage(id: string): void {
+export async function deleteMessage(id: string): Promise<void> {
+  if (/^\d+$/.test(id)) await deleteApi('messages', id);
   removeSync('messages', id);
-  if (/^\d+$/.test(id)) deleteApi('messages', id).catch(() => {});
 }
 
 // --- Authentification admin (jeton Sanctum via l'API Laravel) ---
@@ -73,7 +98,10 @@ export function deleteMessage(id: string): void {
  * Connexion admin. Retourne null en cas de succès, sinon le message à
  * afficher (identifiants invalides, serveur injoignable, trop d'essais…).
  */
-export async function login(email: string, password: string): Promise<string | null> {
+export async function login(
+  email: string,
+  password: string,
+): Promise<string | null> {
   try {
     await apiLogin(email, password);
     return null;

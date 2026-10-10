@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Bundle local de l’aperçu isolé (régénéré au lancement).
+.cache/

@@ -3,12 +3,19 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=20.16.0"
+  },
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "dev:admin-preview": "vite --mode admin-preview --port=3000 --host=0.0.0.0",
+    "build:admin-preview": "vite build --mode admin-preview",
+    "serve:admin-preview": "vite preview --mode admin-preview --host=0.0.0.0 --strictPort",
+    "start:admin-preview": "npm run build:admin-preview && npm run serve:admin-preview"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",
@@ -16,6 +23,7 @@
     "leaflet": "^1.9.4",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "pdfjs-dist": "5.4.624",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-leaflet": "^5.0.0",

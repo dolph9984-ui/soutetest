@@ -1,168 +1,354 @@
-import { useEffect, useState } from "react";
-import { NavLink, Navigate, Outlet, useNavigate } from "react-router-dom";
 import {
-  LayoutDashboard,
-  CalendarDays,
   CalendarCheck,
+  CalendarDays,
+  ChevronRight,
+  Compass,
+  ExternalLink,
+  Hammer,
+  LayoutDashboard,
+  Lock,
+  LogOut,
+  Mail,
   Map,
+  Menu,
+  RotateCcw,
   ShoppingBag,
   Tag,
   Users,
-  Compass,
-  Hammer,
-  Mail,
-  LogOut,
-  ExternalLink,
-  Lock,
-  Menu,
   X,
-} from "lucide-react";
-import { isAuthenticated, login, logout } from "../lib/store";
-import { bootstrap, ApiError } from "../services/adminService";
-import { hydrate, refreshCache, resetCache, isHydrated } from "./crm/sync";
-import { DialogHost } from "./crm/dialog";
+} from 'lucide-react';
+import { useEffect, useState } from 'react';
+import {
+  NavLink,
+  Navigate,
+  Outlet,
+  useLocation,
+  useNavigate,
+} from 'react-router-dom';
+import { isAuthenticated, login, logout } from '../lib/store';
+import {
+  ApiError,
+  bootstrap,
+  ensurePreviewSession,
+  restorePreviewApi,
+} from '../services/adminService';
+import './admin.css';
+import { DialogHost, askConfirm, notice } from './crm/dialog';
+import {
+  getRefreshError,
+  hydrate,
+  isHydrated,
+  refreshCache,
+  resetCache,
+  subscribeSyncState,
+} from './crm/sync';
+import { IS_ADMIN_PREVIEW } from './preview';
+import { clearRecordViewState } from './records';
+import { btnPrimary, inputClass } from './ui';
 
 const links = [
-  { to: "/admin", label: "Tableau de bord", icon: LayoutDashboard, end: true },
-  { to: "/admin/agenda", label: "Agenda", icon: CalendarDays },
-  { to: "/admin/clients", label: "Base clients", icon: Users },
-  { to: "/admin/achats", label: "Demandes d’achat", icon: ShoppingBag },
-  { to: "/admin/visites", label: "Visites", icon: CalendarCheck },
-  { to: "/admin/recherches", label: "Recherches", icon: Compass },
-  { to: "/admin/dossiers-terrains", label: "Demandes de vente", icon: Tag },
-  { to: "/admin/terrains", label: "Catalogue du site", icon: Map },
-  { to: "/admin/realisations", label: "Réalisations", icon: Hammer },
-  { to: "/admin/messages", label: "Messages", icon: Mail },
+  {
+    to: '/admin',
+    label: 'Tableau de bord',
+    icon: LayoutDashboard,
+    end: true,
+    group: 'Vue d’ensemble',
+  },
+  { to: '/admin/agenda', label: 'Agenda', icon: CalendarDays, group: '' },
+  {
+    to: '/admin/clients',
+    label: 'Base clients',
+    icon: Users,
+    group: 'Relations clients',
+  },
+  {
+    to: '/admin/achats',
+    label: 'Demandes d’achat',
+    icon: ShoppingBag,
+    group: '',
+  },
+  { to: '/admin/visites', label: 'Visites', icon: CalendarCheck, group: '' },
+  { to: '/admin/recherches', label: 'Recherches', icon: Compass, group: '' },
+  {
+    to: '/admin/dossiers-terrains',
+    label: 'Demandes de vente',
+    icon: Tag,
+    group: 'Biens & publications',
+  },
+  { to: '/admin/terrains', label: 'Catalogue du site', icon: Map, group: '' },
+  { to: '/admin/realisations', label: 'Réalisations', icon: Hammer, group: '' },
+  {
+    to: '/admin/messages',
+    label: 'Messages',
+    icon: Mail,
+    group: 'Communication',
+  },
 ];
 
 export default function AdminLayout() {
-  const navigate = useNavigate();
-  const [open, setOpen] = useState(false);
-  const [ready, setReady] = useState(isHydrated());
-
+  const navigate = useNavigate(),
+    location = useLocation();
+  const [open, setOpen] = useState(false),
+    [ready, setReady] = useState(isHydrated()),
+    [restoring, setRestoring] = useState(false);
+  const [loadError, setLoadError] = useState(''),
+    [syncError, setSyncError] = useState(getRefreshError);
+  useEffect(
+    () => subscribeSyncState(() => setSyncError(getRefreshError())),
+    [],
+  );
+  const current = [...links]
+    .reverse()
+    .find((l) =>
+      l.end ? location.pathname === l.to : location.pathname.startsWith(l.to),
+    );
   useEffect(() => {
-    if (!isAuthenticated()) return;
+    if (!IS_ADMIN_PREVIEW && !isAuthenticated()) return;
+    // Précharger l'écran d'accueil en parallèle de la session et des données,
+    // plutôt qu'attendre la fin du bootstrap pour télécharger son code.
+    if (window.location.pathname === '/admin' || window.location.pathname === '/admin/') {
+      void import('./Dashboard').catch(() => undefined);
+    }
     if (isHydrated()) {
       setReady(true);
       return;
     }
-    // Un seul chargement par session : toutes les collections du back office.
-    bootstrap()
+    (IS_ADMIN_PREVIEW ? ensurePreviewSession().then(() => bootstrap()) : bootstrap())
       .then((data) => {
         hydrate(data as never);
         setReady(true);
       })
-      .catch(() => navigate("/admin/login", { replace: true }));
+      .catch((error) => {
+        if (error instanceof ApiError && error.status === 401)
+          navigate('/admin/login', { replace: true });
+        else
+          setLoadError(
+            error instanceof Error
+              ? error.message
+              : 'Impossible de charger le back-office.',
+          );
+      });
   }, [navigate]);
-
-  /* Mise à jour automatique : toute fiche créée ailleurs (site public, collègue)
-     apparaît sans F5 — resynchronisation périodique + écrans abonnés au cache. */
   useEffect(() => {
-    const t = window.setInterval(() => {
+    const t = setInterval(() => {
       refreshCache();
-    }, 15_000);
-    return () => window.clearInterval(t);
+    }, 15000);
+    return () => clearInterval(t);
   }, []);
-
-  if (!isAuthenticated()) return <Navigate to="/admin/login" replace />;
-  if (!ready) {
+  useEffect(() => {
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    if (open) document.addEventListener('keydown', escape);
+    return () => document.removeEventListener('keydown', escape);
+  }, [open]);
+  if (!IS_ADMIN_PREVIEW && !isAuthenticated()) return <Navigate to="/admin/login" replace />;
+  if (!ready)
     return (
-      <div className="min-h-screen grid place-items-center bg-navy-950 text-white font-display">
-        <div className="text-center">
+      <div className="admin-app grid min-h-screen place-items-center">
+        <div role={loadError ? 'alert' : 'status'} className="text-center">
           <img
             src="/Logo.jpeg"
             alt="CA IMMO"
-            className="h-14 w-14 rounded-xl object-cover mx-auto animate-pulse"
+            className="h-12 w-12 mx-auto rounded-lg"
           />
-          <p className="mt-4 text-sm text-white/70">
-            Chargement du back office…
+          <p className="mt-4 text-sm text-slate-500">
+            {loadError || 'Chargement du back-office…'}
           </p>
+          {loadError && (
+            <button
+              className={btnPrimary}
+              onClick={() => {
+                setLoadError('');
+                bootstrap()
+                  .then((data) => {
+                    hydrate(data as never);
+                    setReady(true);
+                  })
+                  .catch((error) =>
+                    setLoadError(
+                      error instanceof Error
+                        ? error.message
+                        : 'Chargement impossible.',
+                    ),
+                  );
+              }}
+            >
+              Réessayer
+            </button>
+          )}
         </div>
       </div>
     );
-  }
-
   const handleLogout = async () => {
     await logout();
     resetCache();
-    navigate("/admin/login");
+    clearRecordViewState();
+    navigate('/admin/login');
   };
-
+  const restore = async () => {
+    if (
+      !(await askConfirm(
+        'Restaurer les données fictives de l’aperçu ? Seules vos modifications de test seront effacées. Votre projet et sa base réelle ne sont pas concernés.',
+      ))
+    )
+      return;
+    setRestoring(true);
+    try {
+      await restorePreviewApi();
+      hydrate((await bootstrap()) as never);
+      navigate('/admin');
+    } catch (error) {
+      void notice(
+        error instanceof Error ? error.message : 'Restauration impossible.',
+      );
+    } finally {
+      setRestoring(false);
+    }
+  };
   return (
-    <div className="min-h-screen bg-brand-50 text-navy-900 font-display">
+    <div className="admin-app" data-admin-module={location.pathname.split('/')[2] || 'dashboard'}>
       <DialogHost />
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-64 bg-navy-950 text-white flex flex-col transition-transform lg:translate-x-0 ${
-          open ? "translate-x-0" : "-translate-x-full"
-        }`}
+        className={`fixed inset-y-0 left-0 z-40 w-60 admin-sidebar bg-navy-950 text-white flex flex-col transition-transform lg:translate-x-0 ${open ? 'translate-x-0' : '-translate-x-full'}`}
+        aria-label="Navigation du back-office"
       >
-        <div className="h-20 flex items-center px-6 border-b border-white/10">
+        <div className="h-[72px] px-5 border-b border-white/10 flex items-center gap-3 shrink-0">
           <img
             src="/Logo.jpeg"
-            alt="CA IMMO"
-            className="h-10 w-10 rounded-lg object-cover"
+            alt=""
+            className="h-9 w-9 rounded-md object-cover"
           />
-          <span className="ml-3 leading-none">
-            <span className="block font-extrabold">
-              CA <span className="text-gold-500">IMMO</span>
-            </span>
-            <span className="block text-[10px] text-white/60 mt-1">
-              Backoffice
-            </span>
-          </span>
+          <div>
+            <p className="text-[15px] font-bold tracking-wide">CA <span className="text-gold-500">IMMO</span></p>
+            <p className="text-[10px] text-white/65 mt-0.5">
+              Espace de gestion
+            </p>
+          </div>
+          <button
+            className="lg:hidden ml-auto p-2"
+            onClick={() => setOpen(false)}
+            aria-label="Fermer la navigation"
+          >
+            <X size={18} />
+          </button>
         </div>
-        <nav className="admin-nav-scroll min-h-0 flex-1 p-4 space-y-1 overflow-y-auto">
-          {links.map(({ to, label, icon: Icon, end }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={end}
-              onClick={() => setOpen(false)}
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                  isActive
-                    ? "bg-gold-500 text-navy-950"
-                    : "text-white/75 hover:bg-white/10 hover:text-white"
-                }`
-              }
-            >
-              <Icon className="w-4 h-4" /> {label}
-            </NavLink>
+        <nav
+          className="min-h-0 flex-1 overflow-y-auto px-3 py-4"
+          aria-label="Modules de gestion"
+        >
+          {links.map(({ to, label, icon: Icon, end, group }) => (
+            <div key={to}>
+              {group && (
+                <p className="text-[10px] font-semibold tracking-[.08em] uppercase text-white/60 px-3 pt-4 pb-2 first:pt-0">
+                  {group}
+                </p>
+              )}
+              <NavLink
+                to={to}
+                end={end}
+                onClick={() => setOpen(false)}
+                className={({ isActive }) =>
+                  `admin-nav-link flex items-center gap-3 min-h-10 px-3 mb-1 rounded-md text-[12px] font-medium transition-colors ${isActive ? 'bg-gold-500 text-navy-950' : 'text-white/80 hover:bg-white/10 hover:text-white'}`
+                }
+              >
+                <Icon size={16} strokeWidth={1.6} />
+                {label}
+              </NavLink>
+            </div>
           ))}
         </nav>
-        <div className="p-4 border-t border-white/10 space-y-1">
+        <div className="p-3 border-t border-white/10 space-y-1">
           <a
-            href="/"
+            href={IS_ADMIN_PREVIEW ? '/?site=1' : '/'}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-3 px-4 py-2 rounded-lg text-sm text-white/75 hover:bg-white/10"
+            className="flex gap-3 items-center px-3 min-h-10 text-xs text-white/75 rounded-md hover:bg-white/10"
           >
-            <ExternalLink className="w-4 h-4" /> Voir le site
+            <ExternalLink size={16} />
+            Voir le site public
           </a>
           <button
             onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-2 rounded-lg text-sm text-white/75 hover:bg-white/10"
+            className="flex gap-3 items-center px-3 min-h-10 w-full text-xs text-white/75 rounded-md hover:bg-white/10"
           >
-            <LogOut className="w-4 h-4" /> Déconnexion
+            <LogOut size={16} />
+            Déconnexion
           </button>
         </div>
       </aside>
-
       {open && (
-        <div
-          className="fixed inset-0 z-30 bg-black/40 lg:hidden"
+        <button
+          type="button"
+          aria-label="Fermer la navigation"
+          className="fixed inset-0 z-30 bg-navy-950/30 lg:hidden"
           onClick={() => setOpen(false)}
         />
       )}
-
-      <div className="admin-content min-w-0 lg:ml-64">
-        <header className="lg:hidden sticky top-0 z-30 h-16 bg-navy-900 text-white flex items-center px-4">
-          <button onClick={() => setOpen(!open)} aria-label="Menu">
-            {open ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-          </button>
-          <span className="ml-4 font-bold">CA IMMO — Backoffice</span>
+      <div className="admin-content min-w-0 lg:ml-60">
+        <header className="admin-topbar sticky top-0 z-20 h-[60px] bg-white/95 border-b border-slate-200 flex items-center justify-between gap-3 px-4 sm:px-7">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              className="lg:hidden p-2"
+              onClick={() => setOpen(!open)}
+              aria-label="Ouvrir la navigation"
+              aria-expanded={open}
+            >
+              <Menu size={20} />
+            </button>
+            <span className="hidden sm:inline text-xs text-slate-400">
+              Administration
+            </span>
+            <ChevronRight
+              className="hidden sm:block text-slate-300"
+              size={13}
+            />
+            <span className="text-xs font-medium truncate">
+              {current?.label ?? 'CA IMMO'}
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            {IS_ADMIN_PREVIEW && (
+              <>
+                <span className="admin-preview-badge">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+                  Aperçu isolé
+                </span>
+                <button
+                  onClick={restore}
+                  disabled={restoring}
+                  className="text-xs text-slate-500 inline-flex gap-1.5 items-center min-h-10"
+                  title="Restaurer uniquement les données de test"
+                >
+                  <RotateCcw size={14} />
+                  <span className="hidden md:inline">
+                    {restoring ? 'Restauration…' : 'Réinitialiser les tests'}
+                  </span>
+                </button>
+              </>
+            )}
+            <span className="admin-user-avatar hidden sm:grid h-8 w-8 place-items-center rounded-full bg-slate-100 text-[10px] font-semibold">
+              CA
+            </span>
+          </div>
         </header>
-        <main className="min-w-0 w-full max-w-full p-4 sm:p-8 mx-auto">
+        <main className="min-w-0 w-full max-w-[1680px] p-4 sm:p-7 lg:p-8 mx-auto">
+          {syncError && (
+            <div
+              role="alert"
+              className="mb-5 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 flex flex-wrap items-center justify-between gap-3"
+            >
+              <div>
+                <strong>Actualisation indisponible</strong>
+                <p className="mt-1 text-xs">
+                  {syncError} Les dernières données chargées restent affichées.
+                </p>
+              </div>
+              <button className={btnPrimary} onClick={() => refreshCache(true)}>
+                Réessayer
+              </button>
+            </div>
+          )}
           <Outlet />
         </main>
       </div>
@@ -172,56 +358,63 @@ export default function AdminLayout() {
 
 export function AdminLogin() {
   const navigate = useNavigate();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  if (isAuthenticated()) return <Navigate to="/admin" replace />;
-
+  const [email, setEmail] = useState(
+      IS_ADMIN_PREVIEW ? 'validation@caimmo.example' : '',
+    ),
+    [password, setPassword] = useState(
+      IS_ADMIN_PREVIEW ? 'apercu-ca-immo' : '',
+    );
+  const [error, setError] = useState<string | null>(null),
+    [busy, setBusy] = useState(false);
+  if (IS_ADMIN_PREVIEW || isAuthenticated()) return <Navigate to="/admin" replace />;
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    const failure = await login(email, password); // jeton Sanctum délivré par l'API
+    const failure = await login(email, password);
     if (failure) {
       setError(failure);
       setBusy(false);
       return;
     }
     try {
-      hydrate((await bootstrap()) as never); // charge toutes les données du back office
-      navigate("/admin");
+      hydrate((await bootstrap()) as never);
+      navigate('/admin');
     } catch (error) {
       setError(
-        error instanceof ApiError && error.message
+        error instanceof ApiError
           ? error.message
-          : "Impossible de charger les données du serveur.",
+          : 'Impossible de charger les données.',
       );
       setBusy(false);
     }
   };
-
   return (
-    <div className="min-h-screen bg-navy-950 flex items-center justify-center p-4 font-display">
+    <div className="admin-app min-h-screen flex items-center justify-center p-5">
       <form
         onSubmit={submit}
-        className="w-full max-w-sm bg-white rounded-[2rem] shadow-2xl p-8"
+        className="w-full max-w-[400px] bg-white border border-slate-200 rounded-xl p-8 shadow-sm"
       >
-        <div className="flex flex-col items-center mb-6">
+        <div className="mb-7">
           <img
             src="/Logo.jpeg"
             alt="CA IMMO"
-            className="h-16 w-16 rounded-xl object-cover"
+            className="h-12 w-12 rounded-lg object-cover mb-5"
           />
-          <h1 className="mt-4 text-xl font-bold text-navy-900 font-display">
-            Backoffice CA IMMO
+          <p className="record-eyebrow">CA IMMO · Espace de gestion</p>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {IS_ADMIN_PREVIEW ? 'Valider le nouveau back-office' : 'Connexion'}
           </h1>
-          <p className="text-sm text-gray-500">
-            Accès réservé à l'administration
+          <p className="text-xs text-slate-500 mt-3 leading-relaxed">
+            {IS_ADMIN_PREVIEW
+              ? 'Données fictives isolées. Vous pouvez modifier, créer et supprimer sans toucher à votre base réelle.'
+              : 'Accès réservé à l’administration.'}
           </p>
         </div>
-        <label htmlFor="admin-login-email" className="block text-sm font-medium text-navy-900 mb-1">
+        <label
+          className="block text-xs text-slate-600 mb-2"
+          htmlFor="admin-login-email"
+        >
           Adresse e-mail
         </label>
         <input
@@ -230,19 +423,18 @@ export function AdminLogin() {
           type="email"
           autoComplete="username"
           required
-          autoFocus
           value={email}
-          onChange={(e) => {
-            setEmail(e.target.value);
-            setError(null);
-          }}
-          className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gold-500"
+          onChange={(e) => setEmail(e.target.value)}
+          className={inputClass}
         />
-        <label htmlFor="admin-login-password" className="block text-sm font-medium text-navy-900 mb-1 mt-4">
+        <label
+          className="block text-xs text-slate-600 mt-4 mb-2"
+          htmlFor="admin-login-password"
+        >
           Mot de passe
         </label>
         <div className="relative">
-          <Lock className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-600" />
+          <Lock className="absolute left-3 top-3 text-slate-400" size={15} />
           <input
             id="admin-login-password"
             name="password"
@@ -250,21 +442,31 @@ export function AdminLogin() {
             autoComplete="current-password"
             required
             value={password}
-            onChange={(e) => {
-              setPassword(e.target.value);
-              setError(null);
-            }}
-            className="w-full pl-9 pr-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gold-500"
+            onChange={(e) => setPassword(e.target.value)}
+            className={`${inputClass} pl-9`}
           />
         </div>
-        {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+        {error && (
+          <p role="alert" className="text-xs text-red-600 mt-3">
+            {error}
+          </p>
+        )}
         <button
           type="submit"
           disabled={busy}
-          className="mt-6 w-full py-2.5 rounded-lg bg-navy-900 text-white font-semibold hover:bg-navy-800 disabled:opacity-60"
+          className={`${btnPrimary} w-full mt-6`}
         >
-          {busy ? "Connexion…" : "Se connecter"}
+          {busy
+            ? 'Connexion…'
+            : IS_ADMIN_PREVIEW
+              ? 'Ouvrir l’aperçu'
+              : 'Se connecter'}
         </button>
+        {IS_ADMIN_PREVIEW && (
+          <p className="text-[11px] text-slate-400 mt-4 text-center">
+            Les identifiants de test sont préremplis.
+          </p>
+        )}
       </form>
     </div>
   );

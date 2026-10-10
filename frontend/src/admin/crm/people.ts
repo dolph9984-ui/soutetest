@@ -1,7 +1,7 @@
 // Base clients, recherches de terrain spécifiques et réalisations.
 // Persistance : cache hydraté depuis l'API Laravel (voir crm/sync.ts).
-import { newId } from '../../lib/store';
 import { normalizePhone } from '../../lib/phone';
+import { newId } from '../../lib/store';
 import { HistoryEntry, StoredFile, historyEntry } from './model';
 
 // ======================= CLIENTS =======================
@@ -24,18 +24,46 @@ export interface Client {
 
 export type ClientFields = Omit<Client, 'id' | 'ref' | 'createdAt' | 'source'>;
 export const emptyClientFields = (): ClientFields => ({
-  fullName: '', phone: '', email: '', budget: '', profession: '', age: '', nationality: '', bankAccount: '', message: '',
+  fullName: '',
+  phone: '',
+  email: '',
+  budget: '',
+  profession: '',
+  age: '',
+  nationality: '',
+  bankAccount: '',
+  message: '',
 });
-
 
 // ======================= RECHERCHES SPÉCIFIQUES =======================
 
-export const SEARCH_STATUSES = ['Nouvelle', 'En recherche', 'Terrains proposés', 'Visite programmée', 'Trouvé', 'Clôturée'] as const;
-export const SEARCH_USAGES = ['Habitation', 'Investissement', 'Commerce', 'Agriculture', 'Hôtellerie / tourisme', 'Autre'];
+export const SEARCH_STATUSES = [
+  'Nouvelle',
+  'En recherche',
+  'Terrains proposés',
+  'Visite programmée',
+  'Trouvé',
+  'Clôturée',
+] as const;
+export const SEARCH_USAGES = [
+  'Habitation',
+  'Investissement',
+  'Commerce',
+  'Agriculture',
+  'Hôtellerie / tourisme',
+  'Autre',
+];
 export const RADIUS_OPTIONS = [1, 2, 5, 10, 20, 50];
 export type SearchStatus = (typeof SEARCH_STATUSES)[number];
 
-export interface Proposal { id: string; landId: string; lotId?: string; at: string; note: string; answer: 'En attente' | 'Intéressé' | 'Pas intéressé' | 'Visite demandée' }
+export interface Proposal {
+  id: string;
+  landId: string;
+  lotId?: string;
+  at: string;
+  note: string;
+  answer: 'En attente' | 'Intéressé' | 'Pas intéressé' | 'Visite demandée';
+}
 
 export interface SpecificSearch {
   id: string;
@@ -69,15 +97,47 @@ export interface SpecificSearch {
   history: HistoryEntry[];
 }
 
-export type SearchFields = Omit<SpecificSearch, 'id' | 'ref' | 'createdAt' | 'clientId' | 'status' | 'proposals' | 'attachments' | 'history' | 'source'>;
+export type SearchFields = Omit<
+  SpecificSearch,
+  | 'id'
+  | 'ref'
+  | 'createdAt'
+  | 'clientId'
+  | 'status'
+  | 'proposals'
+  | 'attachments'
+  | 'history'
+  | 'source'
+>;
 export const emptySearchFields = (): SearchFields => ({
-  fullName: '', phone: '', email: '', usage: 'Habitation', budgetMax: 0, areaMin: 0, areaMax: 0,
-  mainZone: '', otherZones: '', targetZone: '', radiusKm: 5, flexible: 'Oui', suggestNearby: true, criteria: '',
+  fullName: '',
+  phone: '',
+  email: '',
+  usage: 'Habitation',
+  budgetMax: 0,
+  areaMin: 0,
+  areaMax: 0,
+  mainZone: '',
+  otherZones: '',
+  targetZone: '',
+  radiusKm: 5,
+  flexible: 'Oui',
+  suggestNearby: true,
+  criteria: '',
 });
 
 // ======================= RÉALISATIONS =======================
 
-export const REALISATION_CATEGORIES = ['Construction de maison', 'Villa', 'Immeuble', 'Lotissement', 'Aménagement de terrain', 'Rénovation', 'Local commercial', 'Autre'];
+export const REALISATION_CATEGORIES = [
+  'Construction de maison',
+  'Villa',
+  'Immeuble',
+  'Lotissement',
+  'Aménagement de terrain',
+  'Rénovation',
+  'Local commercial',
+  'Autre',
+];
 
 export interface Realisation {
   id: string;
@@ -99,16 +159,37 @@ export interface Realisation {
 // ---------- Persistance : cache hydraté depuis l'API Laravel ----------
 // (voir crm/sync.ts : lecture synchrone, écritures vers l'API)
 
-import { saveClientApi, saveSearchApi, saveRealisationApi, deleteApi } from '../../services/adminService';
-import { cache, upsertSync, replaceSync, removeSync, warnSyncFailed } from './sync';
+import {
+  deleteApi,
+  saveClientApi,
+  saveRealisationApi,
+  saveSearchApi,
+} from '../../services/adminService';
+import {
+  cache,
+  removeSync,
+  replaceSync,
+  upsertSync,
+  warnSyncFailed,
+} from './sync';
 
 export function getClients(): Client[] {
   return cache.clients;
 }
 export const getClient = (id: string) => getClients().find((c) => c.id === id);
 
-export async function createClient(fields: ClientFields, source: Client['source']): Promise<Client> {
-  const temp: Client = { ...fields, phone: normalizePhone(fields.phone), id: `tmp-${newId()}`, ref: '', createdAt: new Date().toISOString(), source };
+export async function createClient(
+  fields: ClientFields,
+  source: Client['source'],
+): Promise<Client> {
+  const temp: Client = {
+    ...fields,
+    phone: normalizePhone(fields.phone),
+    id: `tmp-${newId()}`,
+    ref: '',
+    createdAt: new Date().toISOString(),
+    source,
+  };
   upsertSync('clients', temp);
   try {
     const server = await saveClientApi({ ...temp, source });
@@ -139,14 +220,22 @@ export async function deleteClient(id: string): Promise<void> {
 }
 
 /** Rapproche une fiche client par téléphone/email, la crée sinon. */
-export async function findOrCreateClient(fields: Partial<ClientFields>, source: Client['source']): Promise<Client> {
+export async function findOrCreateClient(
+  fields: Partial<ClientFields>,
+  source: Client['source'],
+): Promise<Client> {
   const phone = normalizePhone(fields.phone);
   const email = (fields.email ?? '').trim().toLowerCase();
   const found = getClients().find(
-    (c) => (email && c.email.toLowerCase() === email) || (phone && normalizePhone(c.phone) === phone),
+    (c) =>
+      (email && c.email.toLowerCase() === email) ||
+      (phone && normalizePhone(c.phone) === phone),
   );
   if (found) return found;
-  return createClient({ ...emptyClientFields(), ...fields, phone } as ClientFields, source);
+  return createClient(
+    { ...emptyClientFields(), ...fields, phone } as ClientFields,
+    source,
+  );
 }
 
 export function splitName(fullName: string) {
@@ -155,7 +244,15 @@ export function splitName(fullName: string) {
 }
 
 export function getSearches(): SpecificSearch[] {
-  return cache.searches.map((s) => ({ ...s, proposals: s.proposals ?? [], attachments: s.attachments ?? [], history: s.history ?? [], radiusKm: s.radiusKm ?? 5, flexible: s.flexible ?? 'Oui', suggestNearby: s.suggestNearby ?? true }));
+  return cache.searches.map((s) => ({
+    ...s,
+    proposals: s.proposals ?? [],
+    attachments: s.attachments ?? [],
+    history: s.history ?? [],
+    radiusKm: s.radiusKm ?? 5,
+    flexible: s.flexible ?? 'Oui',
+    suggestNearby: s.suggestNearby ?? true,
+  }));
 }
 export const getSearch = (id: string) => getSearches().find((s) => s.id === id);
 
@@ -185,7 +282,12 @@ export async function createSearch(
 ): Promise<SpecificSearch> {
   const normalizedFields = { ...fields, phone: normalizePhone(fields.phone) };
   const client = await findOrCreateClient(
-    { fullName: normalizedFields.fullName, phone: normalizedFields.phone, email: normalizedFields.email, ...clientFields },
+    {
+      fullName: normalizedFields.fullName,
+      phone: normalizedFields.phone,
+      email: normalizedFields.email,
+      ...clientFields,
+    },
     source,
   );
   const temp: SpecificSearch = {
@@ -196,7 +298,13 @@ export async function createSearch(
     clientId: client.id,
     status: 'Nouvelle',
     proposals: [],
-    history: [historyEntry(source === 'Site web' ? 'Recherche reçue depuis le site web' : 'Recherche créée dans le backoffice')],
+    history: [
+      historyEntry(
+        source === 'Site web'
+          ? 'Recherche reçue depuis le site web'
+          : 'Recherche créée dans le backoffice',
+      ),
+    ],
     source,
   };
   upsertSync('searches', temp);
@@ -215,9 +323,18 @@ export function getRealisations(): Realisation[] {
   // on les normalise en fiches de fichiers pour l'écran admin.
   const asFile = (p: StoredFile | string): StoredFile =>
     typeof p === 'string'
-      ? { id: `seed-${p}`, name: p.split('/').pop() ?? p, type: 'image/jpeg', size: 0, url: p }
+      ? {
+          id: `seed-${p}`,
+          name: p.split('/').pop() ?? p,
+          type: 'image/jpeg',
+          size: 0,
+          url: p,
+        }
       : p;
-  return cache.realisations.map((r) => ({ ...r, photos: (r.photos ?? []).map(asFile) }));
+  return cache.realisations.map((r) => ({
+    ...r,
+    photos: (r.photos ?? []).map(asFile),
+  }));
 }
 export async function saveRealisation(r: Realisation): Promise<Realisation> {
   const item = { ...r, updatedAt: new Date().toISOString() };
@@ -227,6 +344,7 @@ export async function saveRealisation(r: Realisation): Promise<Realisation> {
     replaceSync('realisations', item.id, server as Realisation);
     return server as Realisation;
   } catch {
+    warnSyncFailed(`Réalisation ${item.title}`);
     return item;
   }
 }
@@ -237,9 +355,20 @@ export async function deleteRealisation(id: string): Promise<void> {
 
 export function newRealisation(): Realisation {
   return {
-    id: `tmp-${newId()}`, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-    title: '', category: REALISATION_CATEGORIES[0], location: '', completedAt: '', client: '',
-    area: 0, duration: '', description: '', photos: [], published: false, featured: false,
+    id: `tmp-${newId()}`,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    title: '',
+    category: REALISATION_CATEGORIES[0],
+    location: '',
+    completedAt: '',
+    client: '',
+    area: 0,
+    duration: '',
+    description: '',
+    photos: [],
+    published: false,
+    featured: false,
   };
 }
 

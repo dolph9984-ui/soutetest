@@ -1,21 +1,70 @@
 // Composants partagés des modules « Demandes d'achat » et « Terrains ».
-import { ReactNode, useEffect, useRef, useId, useMemo, useState } from 'react';
 import {
-  ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Download, Eye, FileDown, FileSpreadsheet, FileText, Film, Printer, Search, SlidersHorizontal, Upload, X,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Eye,
+  FileDown,
+  FileSpreadsheet,
+  FileText,
+  Film,
+  Printer,
+  Search,
+  SlidersHorizontal,
+  Upload,
+  X,
 } from 'lucide-react';
-import { Circle, MapContainer, Marker, TileLayer, useMapEvents } from 'react-leaflet';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
-import { newId } from '../../lib/store';
+import {
+  isValidElement,
+  lazy,
+  Suspense,
+  ReactNode,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { createPortal } from 'react-dom';
+
+import { useLocation } from 'react-router-dom';
+import {
+  formatArea,
+  formatAriary,
+  formatDateShort,
+  formatDateTime,
+  formatNumber,
+} from '../../lib/format';
 import { formatPhone, phoneHref } from '../../lib/phone';
-import { formatAriary, formatArea, formatDateShort, formatDateTime, formatNumber } from '../../lib/format';
-import { ADMIN_BADGE_BASE, ADMIN_BUTTON_BASE, ADMIN_BUTTON_DANGER, ADMIN_BUTTON_GOLD, ADMIN_BUTTON_ICON, ADMIN_BUTTON_OUTLINE, ADMIN_BUTTON_PRIMARY, ADMIN_INPUT, ADMIN_SURFACE } from '../tokens';
-import { ADMIN_STATUS_TONES, adminToneClass } from '../status';
+import { newId } from '../../lib/store';
+import { useBodyScrollLock } from '../../shared/overlay';
+import {
+  RecordDrawer,
+  RecordFacts,
+  RecordMenu,
+  RecordValue,
+  useCollectionState,
+} from '../records';
+import { adminStatusClass } from '../status';
+import {
+  ADMIN_BADGE_BASE,
+  ADMIN_BUTTON_BASE,
+  ADMIN_BUTTON_DANGER,
+  ADMIN_BUTTON_GOLD,
+  ADMIN_BUTTON_ICON,
+  ADMIN_BUTTON_OUTLINE,
+  ADMIN_BUTTON_PRIMARY,
+  ADMIN_INPUT,
+  ADMIN_SURFACE,
+} from '../tokens';
+import { notice } from './dialog';
+import { downloadFile, formatSize, putFile, useFileUrl } from './files';
 import type { HistoryEntry, Note, StoredFile } from './model';
 import { ACTOR } from './model';
-import { downloadFile, formatSize, putFile, useFileUrl } from './files';
-import { notice } from './dialog';
-import { useBodyScrollLock, useDialogFocus } from '../../shared/ui';
 
 // ---------- Primitives et formats partagés ----------
 export const input = ADMIN_INPUT;
@@ -49,7 +98,14 @@ export function fmtRelative(iso?: string): string {
 
 /** Cellule date relative (date exacte au survol). */
 export function RelDate({ iso }: { iso?: string }) {
-  return <span className="whitespace-nowrap text-gray-500" title={fmtDateTime(iso)}>{fmtRelative(iso)}</span>;
+  return (
+    <span
+      className="whitespace-nowrap text-slate-600 tabular-nums"
+      title={fmtDateTime(iso)}
+    >
+      {fmtDate(iso)}
+    </span>
+  );
 }
 
 /** Téléphone cliquable dans une ligne de tableau (n'ouvre pas la fiche). */
@@ -59,68 +115,212 @@ export function TelLink({ phone }: { phone?: string }) {
     <a
       href={phoneHref(phone)}
       onClick={(e) => e.stopPropagation()}
-      className="whitespace-nowrap text-navy-900 underline-offset-2 hover:text-gold-700 hover:underline"
+      className="whitespace-nowrap text-navy-900 underline-offset-2 hover:text-navy-700 hover:underline"
     >
       {formatPhone(phone)}
     </a>
   );
 }
 
+function hasContent(node: ReactNode): boolean {
+  if (node === null || node === undefined || typeof node === 'boolean')
+    return false;
+  if (Array.isArray(node)) return node.some(hasContent);
+  if (typeof node === 'string') return !!node.trim();
+  if (
+    isValidElement(node) &&
+    typeof node.type === 'string' &&
+    ['div', 'span', 'ul', 'ol', 'dl'].includes(node.type)
+  )
+    return hasContent((node.props as { children?: ReactNode }).children);
+  return true;
+}
+
 // ---------- Mise en page ----------
-export function Section({ title, icon, children, action, confidential, hint }: {
-  title: string; icon?: ReactNode; children: ReactNode; action?: ReactNode; confidential?: boolean; hint?: ReactNode;
+export function Section({
+  title,
+  icon,
+  children,
+  action,
+  confidential,
+  hint,
+}: {
+  title: string;
+  icon?: ReactNode;
+  children: ReactNode;
+  action?: ReactNode;
+  confidential?: boolean;
+  hint?: ReactNode;
 }) {
   return (
     <section className={ADMIN_SURFACE}>
       <header className="flex items-center justify-between gap-3 px-5 py-4 border-b border-gray-100">
         <h2 className="flex items-center gap-2 font-semibold text-navy-900">
-          {icon && <span className="text-gold-700">{icon}</span>}
+          {icon && <span className="text-slate-500">{icon}</span>}
           {title}
-          {confidential && <span className="ml-1 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-red-50 text-red-700">Confidentiel</span>}
+          {confidential && (
+            <span className="ml-1 text-[10px] px-2 py-0.5 rounded bg-slate-100 text-slate-600">
+              Confidentiel
+            </span>
+          )}
         </h2>
         {action}
       </header>
       <div className="p-5">
         {hint && <p className="mb-4 -mt-1 text-sm text-gray-500">{hint}</p>}
-        {children}
+        {hasContent(children) ? (
+          children
+        ) : (
+          <p className="text-sm text-slate-500">
+            {/photo|galerie/i.test(title)
+              ? 'Aucun visuel ajouté.'
+              : /document/i.test(title)
+                ? 'Aucun document ajouté.'
+                : 'Aucun élément renseigné pour cette rubrique.'}
+          </p>
+        )}
       </div>
     </section>
   );
 }
 
-export function Grid({ children, cols = 3 }: { children: ReactNode; cols?: 2 | 3 | 4 }) {
-  const c = { 2: 'sm:grid-cols-2', 3: 'sm:grid-cols-2 lg:grid-cols-3', 4: 'sm:grid-cols-2 lg:grid-cols-4' }[cols];
+export function Grid({
+  children,
+  cols = 3,
+}: {
+  children: ReactNode;
+  cols?: 2 | 3 | 4;
+}) {
+  const c = {
+    2: 'sm:grid-cols-2',
+    3: 'sm:grid-cols-2 lg:grid-cols-3',
+    4: 'sm:grid-cols-2 lg:grid-cols-4',
+  }[cols];
   return <div className={`grid grid-cols-1 ${c} gap-4`}>{children}</div>;
 }
 
-export function Field({ label, required, children, hint, error, span, full = false }: {
-  label: string; required?: boolean; children: ReactNode; hint?: string; error?: string; span?: 'full' | 2; full?: boolean;
+export function Field({
+  label,
+  required,
+  children,
+  hint,
+  error,
+  span,
+  full = false,
+}: {
+  label: string;
+  required?: boolean;
+  children: ReactNode;
+  hint?: string;
+  error?: string;
+  span?: 'full' | 2;
+  full?: boolean;
 }) {
-  const s = full || span === 'full' ? 'sm:col-span-2 lg:col-span-full' : span === 2 ? 'sm:col-span-2' : '';
+  const id = useId(),
+    root = useRef<HTMLDivElement>(null),
+    labelId = id + '-label';
+  const s =
+    full || span === 'full'
+      ? 'sm:col-span-2 lg:col-span-full'
+      : span === 2
+        ? 'sm:col-span-2'
+        : '';
+  useLayoutEffect(() => {
+    const control = root.current?.querySelector<HTMLElement>(
+      'input:not([type=hidden]),select,textarea',
+    );
+    if (!control) return;
+    root.current?.removeAttribute('role');
+    root.current?.removeAttribute('aria-labelledby');
+    control.id = id;
+    control.setAttribute('aria-labelledby', labelId);
+    if (required) control.setAttribute('aria-required', 'true');
+    else control.removeAttribute('aria-required');
+    control.setAttribute('aria-invalid', error ? 'true' : 'false');
+    const description = error ? id + '-error' : hint ? id + '-hint' : '';
+    if (description) control.setAttribute('aria-describedby', description);
+    else control.removeAttribute('aria-describedby');
+  }, [id, labelId, required, error, hint, children]);
   return (
-    <label className={`block ${s}`}>
-      <span className="block text-xs font-medium text-gray-600 mb-1.5">
-        {label} {required && <span className="text-red-500">*</span>}
-      </span>
+    <div
+      ref={root}
+      className={`block ${s}`}
+      role="group"
+      aria-labelledby={labelId}
+    >
+      <label
+        htmlFor={id}
+        id={labelId}
+        className="block text-xs font-medium text-slate-600 mb-1.5"
+      >
+        {label}
+        {required && (
+          <span aria-hidden="true" className="text-red-600">
+            {' '}
+            *
+          </span>
+        )}
+      </label>
       {children}
-      {error ? <span className="block text-xs text-red-600 mt-1">{error}</span> : hint && <span className="block text-xs text-gray-600 mt-1">{hint}</span>}
-    </label>
+      {error ? (
+        <p
+          id={id + '-error'}
+          role="alert"
+          className="text-xs text-red-700 mt-1"
+        >
+          {error}
+        </p>
+      ) : (
+        hint && (
+          <p id={id + '-hint'} className="text-xs text-slate-500 mt-1">
+            {hint}
+          </p>
+        )
+      )}
+    </div>
   );
 }
 
-export function Select({ value, onChange, options, placeholder, className = '' }: {
-  value: string; onChange: (v: string) => void; options: readonly string[]; placeholder?: string; className?: string;
+export function Select({
+  value,
+  onChange,
+  options,
+  placeholder,
+  className = '',
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: readonly string[];
+  placeholder?: string;
+  className?: string;
 }) {
   return (
-    <select value={value} onChange={(e) => onChange(e.target.value)} className={`${input} ${className}`}>
+    <select
+      aria-label={placeholder}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className={`${input} ${className}`}
+    >
       {placeholder !== undefined && <option value="">{placeholder}</option>}
-      {options.map((o) => <option key={o} value={o}>{o}</option>)}
+      {options.map((o) => (
+        <option key={o} value={o}>
+          {o}
+        </option>
+      ))}
     </select>
   );
 }
 
 /** Boutons segmentés (choix unique). */
-export function Choice({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: readonly string[] }) {
+export function Choice({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: readonly string[];
+}) {
   return (
     <div className="flex flex-wrap gap-1.5">
       {options.map((o) => (
@@ -129,7 +329,9 @@ export function Choice({ value, onChange, options }: { value: string; onChange: 
           type="button"
           onClick={() => onChange(o)}
           className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
-            value === o ? 'bg-navy-900 border-navy-900 text-white' : 'bg-white border-gray-300 text-gray-700 hover:border-navy-900'
+            value === o
+              ? 'bg-navy-900 border-navy-900 text-white'
+              : 'bg-white border-gray-300 text-gray-700 hover:border-navy-900'
           }`}
         >
           {o}
@@ -140,8 +342,17 @@ export function Choice({ value, onChange, options }: { value: string; onChange: 
 }
 
 /** Choix multiple. */
-export function MultiChoice({ value, onChange, options }: { value: string[]; onChange: (v: string[]) => void; options: readonly string[] }) {
-  const toggle = (o: string) => onChange(value.includes(o) ? value.filter((v) => v !== o) : [...value, o]);
+export function MultiChoice({
+  value,
+  onChange,
+  options,
+}: {
+  value: string[];
+  onChange: (v: string[]) => void;
+  options: readonly string[];
+}) {
+  const toggle = (o: string) =>
+    onChange(value.includes(o) ? value.filter((v) => v !== o) : [...value, o]);
   return (
     <div className="flex flex-wrap gap-1.5">
       {options.map((o) => (
@@ -150,7 +361,9 @@ export function MultiChoice({ value, onChange, options }: { value: string[]; onC
           type="button"
           onClick={() => toggle(o)}
           className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
-            value.includes(o) ? 'bg-gold-500 border-gold-500 text-navy-950' : 'bg-white border-gray-300 text-gray-700 hover:border-navy-900'
+            value.includes(o)
+              ? 'bg-navy-900 border-navy-900 text-white'
+              : 'bg-white border-gray-300 text-gray-700 hover:border-navy-900'
           }`}
         >
           {o}
@@ -160,7 +373,17 @@ export function MultiChoice({ value, onChange, options }: { value: string[]; onC
   );
 }
 
-export function NumberInput({ value, onChange, suffix, placeholder }: { value: number; onChange: (n: number) => void; suffix?: string; placeholder?: string }) {
+export function NumberInput({
+  value,
+  onChange,
+  suffix,
+  placeholder,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+  suffix?: string;
+  placeholder?: string;
+}) {
   return (
     <div className="relative">
       <input
@@ -171,26 +394,68 @@ export function NumberInput({ value, onChange, suffix, placeholder }: { value: n
         placeholder={placeholder}
         className={`${input} ${suffix ? 'pr-14' : ''}`}
       />
-      {suffix && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-600">{suffix}</span>}
+      {suffix && (
+        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-600">
+          {suffix}
+        </span>
+      )}
     </div>
   );
 }
 
-export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { id: NoInfer<T>; label: string; badge?: number | string }[]; value: T; onChange: (t: T) => void }) {
+export function Tabs<T extends string>({
+  tabs,
+  value,
+  onChange,
+}: {
+  tabs: { id: NoInfer<T>; label: string; badge?: number | string }[];
+  value: T;
+  onChange: (t: NoInfer<T>) => void;
+}) {
   return (
-    <div className="admin-scroll-x flex gap-1 border-b border-gray-200 mb-5 -mx-1 px-1">
+    <div
+      role="tablist"
+      aria-label="Rubriques du dossier"
+      className="admin-scroll-x flex gap-1 border-b border-gray-200 mb-5 -mx-1 px-1"
+    >
       {tabs.map((t) => (
         <button
           key={t.id}
           type="button"
+          role="tab"
+          aria-selected={value === t.id}
+          tabIndex={value === t.id ? 0 : -1}
+          onKeyDown={(e) => {
+            if (['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(e.key)) {
+              e.preventDefault();
+              const index = tabs.findIndex((x) => x.id === t.id);
+              const next =
+                e.key === 'Home'
+                  ? 0
+                  : e.key === 'End'
+                    ? tabs.length - 1
+                    : (index +
+                        (e.key === 'ArrowRight' ? 1 : -1) +
+                        tabs.length) %
+                      tabs.length;
+              onChange(tabs[next].id);
+              (
+                e.currentTarget.parentElement?.children[next] as HTMLElement
+              )?.focus();
+            }
+          }}
           onClick={() => onChange(t.id)}
           className={`shrink-0 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-            value === t.id ? 'border-gold-500 text-navy-900' : 'border-transparent text-gray-500 hover:text-navy-900'
+            value === t.id
+              ? 'border-navy-900 text-navy-900'
+              : 'border-transparent text-gray-500 hover:text-navy-900'
           }`}
         >
           {t.label}
           {t.badge !== undefined && t.badge !== 0 && (
-            <span className="ml-2 px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 text-[10px]">{t.badge}</span>
+            <span className="ml-2 px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 text-[10px]">
+              {t.badge}
+            </span>
           )}
         </button>
       ))}
@@ -200,17 +465,28 @@ export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { id: 
 
 // ---------- Badges ----------
 export function Badge({ value, dot }: { value: string; dot?: boolean }) {
-  const tone = ADMIN_STATUS_TONES[value] ?? 'gray';
   return (
-    <span className={`${ADMIN_BADGE_BASE} font-medium ${adminToneClass(tone)}`}>
-      {dot && <span className="w-1.5 h-1.5 rounded-full bg-current opacity-70" />}
+    <span
+      className={`${ADMIN_BADGE_BASE} font-medium ${adminStatusClass(value)}`}
+    >
+      {dot && (
+        <span className="w-1.5 h-1.5 rounded-full bg-current opacity-70" />
+      )}
       {value}
     </span>
   );
 }
 
 // ---------- Progression ----------
-export function Stepper({ steps, current, failed }: { steps: string[]; current: number; failed?: string }) {
+export function Stepper({
+  steps,
+  current,
+  failed,
+}: {
+  steps: string[];
+  current: number;
+  failed?: string;
+}) {
   return (
     <div>
       <ol className="flex items-center">
@@ -222,26 +498,43 @@ export function Stepper({ steps, current, failed }: { steps: string[]; current: 
               <div className="flex flex-col items-center">
                 <span
                   className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2 ${
-                    done ? 'bg-gold-500 border-gold-500 text-navy-950' : active ? 'bg-navy-900 border-navy-900 text-white' : 'bg-white border-gray-300 text-gray-600'
+                    done
+                      ? 'bg-navy-900 border-navy-900 text-white'
+                      : active
+                        ? 'bg-navy-900 border-navy-900 text-white'
+                        : 'bg-white border-gray-300 text-gray-600'
                   }`}
                 >
                   {i + 1}
                 </span>
               </div>
-              {i < steps.length - 1 && <span className={`flex-1 h-0.5 mx-1 ${done ? 'bg-gold-500' : 'bg-gray-200'}`} />}
+              {i < steps.length - 1 && (
+                <span
+                  className={`flex-1 h-0.5 mx-1 ${done ? 'bg-navy-900' : 'bg-gray-200'}`}
+                />
+              )}
             </li>
           );
         })}
       </ol>
       <div className="hidden md:flex mt-2">
         {steps.map((s, i) => (
-          <span key={s} className={`flex-1 last:flex-none last:text-right text-[11px] ${i === current ? 'text-navy-900 font-semibold' : 'text-gray-600'}`}>
+          <span
+            key={s}
+            className={`flex-1 last:flex-none last:text-right text-[11px] ${i === current ? 'text-navy-900 font-semibold' : 'text-gray-600'}`}
+          >
             {s}
           </span>
         ))}
       </div>
-      <p className="md:hidden mt-2 text-xs text-navy-900 font-semibold">Étape {current + 1} / {steps.length} : {steps[current]}</p>
-      {failed && <p className="mt-2 text-xs text-red-600">Dossier {failed.toLowerCase()}</p>}
+      <p className="md:hidden mt-2 text-xs text-navy-900 font-semibold">
+        Étape {current + 1} / {steps.length} : {steps[current]}
+      </p>
+      {failed && (
+        <p className="mt-2 text-xs text-red-600">
+          Dossier {failed.toLowerCase()}
+        </p>
+      )}
     </div>
   );
 }
@@ -254,114 +547,438 @@ export interface Column<T> {
   sort?: (row: T) => string | number;
   csv?: (row: T) => string | number;
   className?: string;
+  width?: number;
+  align?: 'left' | 'right';
+  /** Les champs secondaires restent accessibles dans l'aperçu et les exports. */
+  defaultVisible?: boolean;
 }
 
-export function DataTable<T extends { id: string }>({ rows, columns, onOpen, selected, onSelect, rowActions, rowClass, pageSize = 10 }: {
-  rows: T[]; columns: Column<T>[]; onOpen: (row: T) => void;
-  selected: string[]; onSelect: (ids: string[]) => void; rowActions?: (row: T) => ReactNode;
-  /** Classe additionnelle par ligne (ex. surligner les dossiers non traités). */
-  rowClass?: (row: T) => string; pageSize?: number;
+export function DataTable<T extends { id: string }>({
+  rows,
+  columns,
+  onOpen,
+  selected,
+  onSelect,
+  rowActions,
+  rowClass,
+  pageSize = 10,
+  entityLabel = 'dossiers',
+  filtered = false,
+  onClearFilters,
+  previewContent,
+}: {
+  rows: T[];
+  columns: Column<T>[];
+  onOpen: (row: T) => void;
+  selected: string[];
+  onSelect: (ids: string[]) => void;
+  rowActions?: (row: T) => ReactNode;
+  rowClass?: (row: T) => string;
+  pageSize?: number;
+  entityLabel?: string;
+  filtered?: boolean;
+  onClearFilters?: () => void;
+  previewContent?: (row: T) => ReactNode;
 }) {
-  const [sortKey, setSortKey] = useState<string>('');
-  const [dir, setDir] = useState<1 | -1>(1);
-  const [page, setPage] = useState(1);
-  useEffect(() => setPage(1), [rows]);
-
+  const { pathname } = useLocation();
+  const [sortKey, setSortKey] = useCollectionState(pathname, 'sort', '');
+  const [dir, setDir] = useCollectionState<1 | -1>(pathname, 'direction', 1);
+  const [page, setPage] = useCollectionState(pathname, 'page', 1);
+  const [density, setDensity] = useCollectionState<'standard' | 'compact'>(
+    pathname,
+    'density',
+    'standard',
+  );
+  const [visibleKeys, setVisibleKeys] = useCollectionState<string[]>(
+    pathname,
+    'columns',
+    columns.filter((c) => c.defaultVisible !== false).map((c) => c.key),
+  );
+  const [peek, setPeek] = useState<T | null>(null);
+  const allCheck = useRef<HTMLInputElement>(null);
+  const visible = columns.filter(
+    (c, i) => i === 0 || visibleKeys.includes(c.key),
+  );
   const sorted = useMemo(() => {
     const col = columns.find((c) => c.key === sortKey);
     if (!col?.sort) return rows;
     return [...rows].sort((a, b) => {
-      const x = col.sort!(a), y = col.sort!(b);
+      const x = col.sort!(a),
+        y = col.sort!(b);
+      if (x === '' || x == null) return y === '' || y == null ? 0 : 1;
+      if (y === '' || y == null) return -1;
       return (x < y ? -1 : x > y ? 1 : 0) * dir;
     });
   }, [rows, columns, sortKey, dir]);
-
-  const pages = Math.max(1, Math.ceil(sorted.length / pageSize));
-  const current = Math.min(page, pages);
+  const pages = Math.max(1, Math.ceil(sorted.length / pageSize)),
+    current = Math.min(page, pages);
   const shown = sorted.slice((current - 1) * pageSize, current * pageSize);
-  const allShown = shown.length > 0 && shown.every((r) => selected.includes(r.id));
-
+  const allShown =
+    shown.length > 0 && shown.every((r) => selected.includes(r.id));
+  const someShown = shown.some((r) => selected.includes(r.id));
+  useEffect(() => {
+    if (allCheck.current)
+      allCheck.current.indeterminate = someShown && !allShown;
+  }, [someShown, allShown]);
+  const toggleAll = () =>
+    onSelect(
+      allShown
+        ? selected.filter((id) => !shown.some((r) => r.id === id))
+        : [...new Set([...selected, ...shown.map((r) => r.id)])],
+    );
   const toggleSort = (key: string) => {
     if (sortKey === key) setDir(dir === 1 ? -1 : 1);
-    else { setSortKey(key); setDir(1); }
+    else {
+      setSortKey(key);
+      setDir(1);
+    }
   };
-  const toggleAll = () =>
-    onSelect(allShown ? selected.filter((id) => !shown.some((r) => r.id === id)) : [...new Set([...selected, ...shown.map((r) => r.id)])]);
-
-  return (
-    <div className={`${ADMIN_SURFACE} overflow-hidden`}>
-      <div
-        className="admin-scroll-x"
-        role="region"
-        aria-label="Tableau de résultats, défilement horizontal possible"
-        tabIndex={0}
+  const titleOf = (r: T) => {
+    const value = columns[0]?.render(r);
+    if (
+      isValidElement(value) &&
+      typeof (value.props as { title?: unknown }).title === 'string'
+    )
+      return (value.props as { title: string }).title;
+    const v = r as T & { fullName?: string; title?: string; ref?: string };
+    return v.fullName || v.title || v.ref || `Fiche #${r.id}`;
+  };
+  const referenceOf = (r: T) => (r as T & { ref?: string }).ref ?? `#${r.id}`;
+  const check = (r: T) => (
+    <label className="record-check" onClick={(e) => e.stopPropagation()}>
+      <input
+        type="checkbox"
+        checked={selected.includes(r.id)}
+        onChange={() =>
+          onSelect(
+            selected.includes(r.id)
+              ? selected.filter((id) => id !== r.id)
+              : [...selected, r.id],
+          )
+        }
+        aria-label={`Sélectionner ${titleOf(r)}`}
+      />
+    </label>
+  );
+  const actions = (r: T) => (
+    <div className="record-row-actions">
+      <button
+        type="button"
+        className={btnIcon}
+        onClick={(e) => {
+          e.stopPropagation();
+          setPeek(r);
+        }}
+        aria-label={`Aperçu de ${titleOf(r)}`}
+        title="Aperçu"
       >
-        <table className="w-full min-w-max text-sm">
-          <thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
-            <tr>
-              <th scope="col" className="p-3 w-10"><input type="checkbox" checked={allShown} onChange={toggleAll} aria-label="Tout sélectionner sur cette page" /></th>
-              <th scope="col" className="p-2 w-10"><span className="sr-only">Ouvrir la fiche</span></th>
-              {columns.map((c) => (
-                <th scope="col" key={c.key} className={`p-3 font-medium whitespace-nowrap ${c.className ?? ''}`}>
-                  {c.sort ? (
-                    <button type="button" onClick={() => toggleSort(c.key)} className="inline-flex items-center gap-1 hover:text-navy-900">
-                      {c.label}
-                      {sortKey !== c.key ? <ArrowUpDown className="w-3 h-3 opacity-40" /> : dir === 1 ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />}
-                    </button>
-                  ) : c.label}
-                </th>
-              ))}
-              {rowActions && <th className="p-3" />}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {shown.map((r) => (
-              <tr key={r.id} className={`hover:bg-gold-400/5 cursor-pointer ${selected.includes(r.id) ? 'bg-gold-400/10' : rowClass?.(r) ?? ''}`} onClick={() => onOpen(r)}>
-                {/* h-16 : hauteur de ligne identique sur toutes les listes du back office */}
-                <td className="p-3 h-16" onClick={(event) => event.stopPropagation()}>
+        <Eye size={16} />
+      </button>
+      <RecordMenu label={`Actions pour ${titleOf(r)}`}>
+        <button type="button" onClick={() => onOpen(r)}>
+          <FileText size={16} />
+          Ouvrir la fiche
+        </button>
+        {rowActions?.(r)}
+      </RecordMenu>
+    </div>
+  );
+  const empty = (
+    <div className="record-table-empty">
+      <FileText className="w-6 h-6 mx-auto mb-3 text-slate-400" />
+      <h3>
+        {filtered
+          ? 'Aucun résultat pour ces filtres'
+          : `Aucun ${entityLabel} pour le moment`}
+      </h3>
+      <p>
+        {filtered
+          ? 'Modifiez la recherche ou effacez les filtres.'
+          : 'Les nouveaux éléments apparaîtront dans cette collection.'}
+      </p>
+      {filtered && onClearFilters && (
+        <button className={`${btnOutline} mt-4`} onClick={onClearFilters}>
+          Effacer les filtres
+        </button>
+      )}
+    </div>
+  );
+  return (
+    <>
+      <div className="record-table-surface" data-collection={pathname}>
+        <div className="record-table-top">
+          <span>
+            {rows.length} {entityLabel}
+            {selected.length > 0 && (
+              <>
+                {' '}
+                · <strong>{selected.length} sélectionné(s)</strong>{' '}
+                <button className="underline ml-2" onClick={() => onSelect([])}>
+                  Annuler
+                </button>
+              </>
+            )}
+          </span>
+          <div className="record-table-options">
+            <label className="record-density">
+              <span className="sr-only">Densité du tableau</span>
+              <select
+                value={density}
+                onChange={(e) =>
+                  setDensity(e.target.value as 'standard' | 'compact')
+                }
+              >
+                <option value="standard">Standard · 64 px</option>
+                <option value="compact">Compact · 52 px</option>
+              </select>
+            </label>
+            <RecordMenu label="Colonnes du tableau">
+              {columns.slice(1).map((c) => (
+                <label key={c.key} className="record-column-choice">
                   <input
                     type="checkbox"
-                    checked={selected.includes(r.id)}
-                    onChange={() => onSelect(selected.includes(r.id) ? selected.filter((id) => id !== r.id) : [...selected, r.id])}
-                    aria-label={`Sélectionner le dossier ${r.id}`}
+                    checked={visibleKeys.includes(c.key)}
+                    onChange={() =>
+                      setVisibleKeys(
+                        visibleKeys.includes(c.key)
+                          ? visibleKeys.filter((k) => k !== c.key)
+                          : [...visibleKeys, c.key],
+                      )
+                    }
                   />
-                </td>
-                <td className="p-2" onClick={(event) => event.stopPropagation()}>
-                  <button type="button" className={btnIcon} aria-label={`Ouvrir la fiche ${r.id}`} title="Ouvrir la fiche" onClick={() => onOpen(r)}>
-                    <Eye className="w-4 h-4" aria-hidden="true" />
-                  </button>
-                </td>
-                {columns.map((c) => <td key={c.key} className={`p-3 ${c.className ?? ''}`}>{c.render(r)}</td>)}
-                {rowActions && <td className="p-3 whitespace-nowrap text-right" onClick={(e) => e.stopPropagation()}>{rowActions(r)}</td>}
-              </tr>
-            ))}
-            {shown.length === 0 && (
-              <tr><td colSpan={columns.length + 2 + (rowActions ? 1 : 0)} className="p-10 text-center text-gray-600">Aucun dossier ne correspond aux filtres.</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      <p className="border-t border-gray-100 bg-gray-50/60 px-4 py-1.5 text-[11px] text-gray-500 sm:hidden">
-        Faites glisser le tableau horizontalement pour voir toutes les colonnes.
-      </p>
-      <footer className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-t border-gray-100 text-sm text-gray-500">
-        <span>{sorted.length} dossier(s){selected.length > 0 && ` · ${selected.length} sélectionné(s)`}</span>
-        <div className="flex items-center gap-1">
-          <button className={btnIcon} disabled={current === 1} onClick={() => setPage(current - 1)} aria-label="Page précédente"><ChevronLeft className="w-4 h-4" /></button>
-          <span className="px-2">Page {current} / {pages}</span>
-          <button className={btnIcon} disabled={current === pages} onClick={() => setPage(current + 1)} aria-label="Page suivante"><ChevronRight className="w-4 h-4" /></button>
+                  {c.label}
+                </label>
+              ))}
+            </RecordMenu>
+          </div>
         </div>
-      </footer>
-    </div>
+        {!rows.length ? (
+          empty
+        ) : (
+          <>
+            <div
+              className="record-table-scroll"
+              role="region"
+              aria-label="Tableau de résultats"
+              tabIndex={0}
+            >
+              <table
+                className={`record-table ${density === 'compact' ? 'is-compact' : ''}`}
+                style={{
+                  minWidth: Math.max(
+                    950,
+                    132 +
+                      visible.reduce(
+                        (total, c, i) =>
+                          total + (i === 0 ? 250 : (c.width ?? 130)),
+                        0,
+                      ),
+                  ),
+                }}
+              >
+                <colgroup>
+                  <col style={{ width: 44 }} />
+                  {visible.map((c, i) => (
+                    <col
+                      key={c.key}
+                      style={{ width: c.width ?? (i === 0 ? undefined : 130) }}
+                    />
+                  ))}
+                  <col style={{ width: 88 }} />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th scope="col">
+                      <label className="record-check">
+                        <input
+                          ref={allCheck}
+                          type="checkbox"
+                          checked={allShown}
+                          onChange={toggleAll}
+                          aria-label="Sélectionner les éléments de cette page"
+                        />
+                      </label>
+                    </th>
+                    {visible.map((c) => (
+                      <th
+                        scope="col"
+                        key={c.key}
+                        className={c.align === 'right' ? 'record-right' : ''}
+                        aria-sort={
+                          sortKey === c.key
+                            ? dir === 1
+                              ? 'ascending'
+                              : 'descending'
+                            : undefined
+                        }
+                      >
+                        {c.sort ? (
+                          <button
+                            type="button"
+                            onClick={() => toggleSort(c.key)}
+                            className="inline-flex items-center gap-1.5"
+                          >
+                            {c.label}
+                            {sortKey === c.key ? (
+                              dir === 1 ? (
+                                <ArrowUp size={12} />
+                              ) : (
+                                <ArrowDown size={12} />
+                              )
+                            ) : (
+                              <ArrowUpDown size={12} className="opacity-40" />
+                            )}
+                          </button>
+                        ) : (
+                          c.label
+                        )}
+                      </th>
+                    ))}
+                    <th scope="col">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shown.map((r) => (
+                    <tr
+                      key={r.id}
+                      className={
+                        selected.includes(r.id)
+                          ? 'record-selected'
+                          : (rowClass?.(r) ?? '')
+                      }
+                      onClick={(e) => {
+                        if (
+                          !(e.target as HTMLElement).closest(
+                            'a,button,input,select,label',
+                          )
+                        )
+                          onOpen(r);
+                      }}
+                    >
+                      <td>{check(r)}</td>
+                      {visible.map((c, i) => (
+                        <td
+                          key={c.key}
+                          className={`${c.align === 'right' ? 'record-right' : ''} ${c.className ?? ''}`}
+                        >
+                          {i === 0 ? (
+                            <button
+                              type="button"
+                              className="record-identity-button"
+                              onClick={() => onOpen(r)}
+                            >
+                              {c.render(r)}
+                            </button>
+                          ) : (
+                            c.render(r)
+                          )}
+                        </td>
+                      ))}
+                      <td onClick={(e) => e.stopPropagation()}>{actions(r)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {shown.map((r) => (
+              <article key={r.id} className="record-mobile-row">
+                <div className="record-mobile-top">
+                  <div className="record-mobile-title">
+                    <button
+                      type="button"
+                      className="text-left w-full"
+                      onClick={() => onOpen(r)}
+                    >
+                      {columns[0].render(r)}
+                    </button>
+                  </div>
+                  {actions(r)}
+                </div>
+                <dl className="record-mobile-facts">
+                  {visible.slice(1, 5).map((c) => (
+                    <div key={c.key}>
+                      <dt>{c.label}</dt>
+                      <dd>{c.render(r)}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </article>
+            ))}
+          </>
+        )}
+        <footer className="record-table-footer">
+          <span>
+            {sorted.length
+              ? `${(current - 1) * pageSize + 1}–${Math.min(current * pageSize, sorted.length)} sur ${sorted.length}`
+              : '0 résultat'}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              className={btnIcon}
+              disabled={current === 1}
+              onClick={() => setPage(current - 1)}
+              aria-label="Page précédente"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <span>
+              Page {current} / {pages}
+            </span>
+            <button
+              className={btnIcon}
+              disabled={current === pages}
+              onClick={() => setPage(current + 1)}
+              aria-label="Page suivante"
+            >
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        </footer>
+      </div>
+      {peek && (
+        <RecordDrawer
+          title={titleOf(peek)}
+          reference={referenceOf(peek)}
+          onClose={() => setPeek(null)}
+          onOpen={() => onOpen(peek)}
+        >
+          <section className="record-drawer-section">
+            <h3>Informations du dossier</h3>
+            <RecordFacts
+              facts={columns
+                .slice(1)
+                .map((c) => ({ label: c.label, value: c.render(peek) }))}
+            />
+          </section>
+          {previewContent && (
+            <section className="record-drawer-section">
+              {previewContent(peek)}
+            </section>
+          )}
+        </RecordDrawer>
+      )}
+    </>
   );
 }
 
 /** Export CSV (s'ouvre directement dans Excel, séparateur « ; » et BOM UTF-8 pour les accents). */
-export function exportCsv<T>(rows: T[], columns: Column<T>[], filename: string) {
+export function exportCsv<T>(
+  rows: T[],
+  columns: Column<T>[],
+  filename: string,
+) {
   const cols = columns.filter((c) => c.csv);
-  const esc = (v: string | number) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const lines = [cols.map((c) => esc(c.label)).join(';'), ...rows.map((r) => cols.map((c) => esc(c.csv!(r))).join(';'))];
-  const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const esc = (v: string | number) =>
+    `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const lines = [
+    cols.map((c) => esc(c.label)).join(';'),
+    ...rows.map((r) => cols.map((c) => esc(c.csv!(r))).join(';')),
+  ];
+  const blob = new Blob(['﻿' + lines.join('\r\n')], {
+    type: 'text/csv;charset=utf-8',
+  });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `${filename}-${new Date().toISOString().slice(0, 10)}.csv`;
@@ -371,8 +988,17 @@ export function exportCsv<T>(rows: T[], columns: Column<T>[], filename: string) 
 
 /** Échappe les valeurs dynamiques avant de les insérer dans un document HTML imprimable. */
 export function escapeHtml(value: unknown): string {
-  const entities: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-  return String(value ?? '').replace(/[&<>"']/g, (character) => entities[character]!);
+  const entities: Record<string, string> = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  };
+  return String(value ?? '').replace(
+    /[&<>"']/g,
+    (character) => entities[character]!,
+  );
 }
 
 /** Impression / export PDF d'un tableau : ouvre une page imprimable (choisir « Enregistrer en PDF »). */
@@ -382,18 +1008,25 @@ export function printTable<T>(rows: T[], columns: Column<T>[], title: string) {
   printHtml(
     title,
     `<table><thead><tr>${cols.map((c) => `<th>${esc(c.label)}</th>`).join('')}</tr></thead><tbody>${rows
-      .map((r) => `<tr>${cols.map((c) => `<td>${esc(c.csv!(r))}</td>`).join('')}</tr>`)
+      .map(
+        (r) =>
+          `<tr>${cols.map((c) => `<td>${esc(c.csv!(r))}</td>`).join('')}</tr>`,
+      )
       .join('')}</tbody></table>`,
   );
 }
 
 export function printHtml(title: string, body: string) {
   const w = window.open('', '_blank');
-  if (!w) { void notice('Autorisez les fenêtres pop-up pour imprimer.'); return; }
+  if (!w) {
+    void notice('Autorisez les fenêtres pop-up pour imprimer.');
+    return;
+  }
   const safeTitle = escapeHtml(title);
   // `body` peut contenir du HTML de présentation : ses valeurs dynamiques
   // doivent toujours passer par escapeHtml() avant l'appel.
-  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${safeTitle}</title><style>
+  w.document
+    .write(`<!doctype html><html><head><meta charset="utf-8"><title>${safeTitle}</title><style>
     body{font-family:system-ui,sans-serif;color:#0b1e42;margin:24px;font-size:12px}
     h1{font-size:18px;margin:0 0 4px} .muted{color:#6b7280} h2{font-size:14px;margin:20px 0 8px;border-bottom:2px solid #f7c325;padding-bottom:4px}
     table{width:100%;border-collapse:collapse;margin-top:12px} th,td{border:1px solid #e5e7eb;padding:6px;text-align:left;vertical-align:top}
@@ -405,8 +1038,21 @@ export function printHtml(title: string, body: string) {
 }
 
 // ---------- Fichiers ----------
-export function FileDrop({ accept, maxMb, multiple, onFiles, label, hint, visibility = 'private' }: {
-  accept: string; maxMb: number; multiple?: boolean; onFiles: (files: StoredFile[]) => void; label: string; hint?: string;
+export function FileDrop({
+  accept,
+  maxMb,
+  multiple,
+  onFiles,
+  label,
+  hint,
+  visibility = 'private',
+}: {
+  accept: string;
+  maxMb: number;
+  multiple?: boolean;
+  onFiles: (files: StoredFile[]) => void;
+  label: string;
+  hint?: string;
   visibility?: 'public' | 'private';
 }) {
   const ref = useRef<HTMLInputElement>(null);
@@ -421,8 +1067,14 @@ export function FileDrop({ accept, maxMb, multiple, onFiles, label, hint, visibi
     const ok: File[] = [];
     for (const f of Array.from(list)) {
       const ext = '.' + f.name.split('.').pop()?.toLowerCase();
-      if (!types.includes(f.type) && !types.includes(ext)) { setError(`Format non accepté : ${f.name}`); continue; }
-      if (f.size > maxMb * 1024 * 1024) { setError(`${f.name} dépasse ${maxMb} Mo`); continue; }
+      if (!types.includes(f.type) && !types.includes(ext)) {
+        setError(`Format non accepté : ${f.name}`);
+        continue;
+      }
+      if (f.size > maxMb * 1024 * 1024) {
+        setError(`${f.name} dépasse ${maxMb} Mo`);
+        continue;
+      }
       ok.push(f);
     }
     if (!ok.length) return;
@@ -430,7 +1082,9 @@ export function FileDrop({ accept, maxMb, multiple, onFiles, label, hint, visibi
     try {
       onFiles(await Promise.all(ok.map((file) => putFile(file, visibility))));
     } catch {
-      setError('Impossible d’enregistrer le fichier (espace de stockage du navigateur insuffisant ?).');
+      setError(
+        'Le fichier n’a pas pu être enregistré. Vérifiez la connexion puis réessayez.',
+      );
     } finally {
       setBusy(false);
       if (ref.current) ref.current.value = '';
@@ -444,35 +1098,89 @@ export function FileDrop({ accept, maxMb, multiple, onFiles, label, hint, visibi
         tabIndex={0}
         onClick={() => ref.current?.click()}
         onKeyDown={(e) => e.key === 'Enter' && ref.current?.click()}
-        onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setOver(true);
+        }}
         onDragLeave={() => setOver(false)}
-        onDrop={(e) => { e.preventDefault(); setOver(false); handle(e.dataTransfer.files); }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setOver(false);
+          handle(e.dataTransfer.files);
+        }}
         className={`flex flex-col items-center justify-center gap-1 px-4 py-6 border-2 border-dashed rounded-xl cursor-pointer text-center transition-colors ${
-          over ? 'border-gold-500 bg-gold-400/10' : 'border-gray-300 hover:border-navy-900 bg-gray-50'
+          over
+            ? 'border-gold-500 bg-gold-400/10'
+            : 'border-gray-300 hover:border-navy-900 bg-gray-50'
         }`}
       >
         <Upload className="w-6 h-6 text-gray-600" />
-        <span className="text-sm font-medium text-navy-900">{busy ? 'Enregistrement…' : label}</span>
-        <span className="text-xs text-gray-600">Glisser-déposer ou cliquer · {hint}</span>
-        <input ref={ref} type="file" accept={accept} multiple={multiple} className="hidden" onChange={(e) => handle(e.target.files)} />
+        <span className="text-sm font-medium text-navy-900">
+          {busy ? 'Enregistrement…' : label}
+        </span>
+        <span className="text-xs text-gray-600">
+          Glisser-déposer ou cliquer · {hint}
+        </span>
+        <input
+          ref={ref}
+          type="file"
+          accept={accept}
+          multiple={multiple}
+          className="hidden"
+          onChange={(e) => handle(e.target.files)}
+        />
       </div>
       {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
     </div>
   );
 }
 
-export function Thumb({ file, className = '' }: { file: StoredFile; className?: string }) {
-  const url = useFileUrl((file.type ?? '').startsWith('image/') ? file : undefined);
+export function Thumb({
+  file,
+  className = '',
+}: {
+  file: StoredFile;
+  className?: string;
+}) {
+  const url = useFileUrl(
+    (file.type ?? '').startsWith('image/') ? file : undefined,
+  );
   // `type` peut être absent/null pour des documents historiques (anciens
   // libellés texte migrés sans type MIME connu) : on sécurise avec `?? ''`
   // pour ne jamais planter sur `.startsWith(...)`.
   const type = file.type ?? '';
-  if (type.startsWith('image/')) return url ? <img src={url} alt={file.name} className={`object-cover ${className}`} referrerPolicy="no-referrer" loading="lazy" decoding="async" /> : <div className={`bg-gray-100 ${className}`} />;
+  if (type.startsWith('image/'))
+    return url ? (
+      <img
+        src={url}
+        alt={file.name}
+        className={`object-cover ${className}`}
+        referrerPolicy="no-referrer"
+        loading="lazy"
+        decoding="async"
+      />
+    ) : (
+      <div className={`bg-gray-100 ${className}`} />
+    );
   const Icon = type.startsWith('video/') ? Film : FileText;
-  return <div className={`flex items-center justify-center bg-gray-100 text-gray-600 ${className}`}><Icon className="w-6 h-6" /></div>;
+  return (
+    <div
+      className={`flex items-center justify-center bg-gray-100 text-gray-600 ${className}`}
+    >
+      <Icon className="w-6 h-6" />
+    </div>
+  );
 }
 
-export function FileChip({ file, onPreview, onRemove }: { file: StoredFile; onPreview: () => void; onRemove?: () => void }) {
+export function FileChip({
+  file,
+  onPreview,
+  onRemove,
+}: {
+  file: StoredFile;
+  onPreview: () => void;
+  onRemove?: () => void;
+}) {
   return (
     <div className="flex items-center gap-3 p-2 border border-gray-200 rounded-lg">
       <Thumb file={file} className="w-10 h-10 rounded" />
@@ -480,14 +1188,45 @@ export function FileChip({ file, onPreview, onRemove }: { file: StoredFile; onPr
         <p className="text-sm font-medium truncate">{file.name}</p>
         <p className="text-xs text-gray-600">{formatSize(file.size)}</p>
       </div>
-      <button type="button" className={btnIcon} onClick={onPreview} aria-label="Aperçu"><Eye className="w-4 h-4" /></button>
-      <button type="button" className={btnIcon} onClick={() => downloadFile(file)} aria-label="Télécharger"><Download className="w-4 h-4" /></button>
-      {onRemove && <button type="button" className={`${btnIcon} hover:text-red-600`} onClick={onRemove} aria-label="Retirer"><X className="w-4 h-4" /></button>}
+      <button
+        type="button"
+        className={btnIcon}
+        onClick={onPreview}
+        aria-label="Aperçu"
+      >
+        <Eye className="w-4 h-4" />
+      </button>
+      <button
+        type="button"
+        className={btnIcon}
+        onClick={() => downloadFile(file)}
+        aria-label="Télécharger"
+      >
+        <Download className="w-4 h-4" />
+      </button>
+      {onRemove && (
+        <button
+          type="button"
+          className={`${btnIcon} hover:text-red-600`}
+          onClick={onRemove}
+          aria-label="Retirer"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      )}
     </div>
   );
 }
 
-export function Preview({ file, onClose }: { file: StoredFile | null; onClose: () => void }) {
+const LazyPdfViewer = lazy(() => import('./PdfViewer'));
+
+export function Preview({
+  file,
+  onClose,
+}: {
+  file: StoredFile | null;
+  onClose: () => void;
+}) {
   const { url, resolved } = useFileUrl(file ?? undefined, true);
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -504,141 +1243,167 @@ export function Preview({ file, onClose }: { file: StoredFile | null; onClose: (
     };
   }, [file?.id]);
   if (!file) return null;
+  const type = file.type ?? '';
+  const isPdf = /^application\/pdf(?:\s*;|$)/i.test(type) || /\.pdf$/i.test(file.name);
   return (
-    <dialog ref={dialog} aria-label={file.name} onCancel={(event) => { event.preventDefault(); onClose(); }} className="fixed inset-0 z-[60] m-0 h-dvh w-screen max-h-none max-w-none bg-black/90 p-0 text-white backdrop:bg-black/80 open:flex open:flex-col" onClick={onClose}>
-      <div className="flex items-center justify-between p-4 text-white" onClick={(e) => e.stopPropagation()}>
+    <dialog
+      ref={dialog}
+      aria-label={file.name}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      className="fixed inset-0 z-[60] m-0 h-dvh w-screen max-h-none max-w-none bg-black/90 p-0 text-white backdrop:bg-black/80 open:flex open:flex-col"
+      onClick={onClose}
+    >
+      <div
+        className="flex items-center justify-between p-4 text-white"
+        onClick={(e) => e.stopPropagation()}
+      >
         <span className="truncate">{file.name}</span>
         <div className="flex gap-2">
-          {(url || !resolved) && <button className={`${btn} bg-white/10 hover:bg-white/20`} onClick={() => downloadFile(file)}><Download className="w-4 h-4" /> Télécharger</button>}
-          <button className={`${btn} bg-white/10 hover:bg-white/20`} onClick={onClose} aria-label="Fermer"><X className="w-4 h-4" /></button>
+          {(url || !resolved) && (
+            <button
+              type="button"
+              className={`${btn} bg-white/10 hover:bg-white/20`}
+              onClick={() => downloadFile(file)}
+            >
+              <Download className="w-4 h-4" /> Télécharger
+            </button>
+          )}
+          <button
+            type="button"
+            className={`${btn} bg-white/10 hover:bg-white/20`}
+            onClick={onClose}
+            aria-label="Fermer"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       </div>
-      <div className="flex-1 flex items-center justify-center p-4 min-h-0" onClick={(e) => e.stopPropagation()}>
-        {(() => {
-          const type = file.type ?? '';
-          if (!url) {
-            if (!resolved) return <p className="text-white/60">Chargement…</p>;
-            return <p className="text-white/70">Aucun fichier déposé pour cette pièce (document historique sans fichier joint).</p>;
-          }
-          if (type.startsWith('image/')) return <img src={url} alt={file.name} className="max-h-full max-w-full rounded-lg" referrerPolicy="no-referrer" loading="eager" decoding="async" />;
-          if (type.startsWith('video/')) return <video src={url} controls className="max-h-full max-w-full rounded-lg" />;
-          if (type === 'application/pdf') return <iframe src={url} title={file.name} className="w-full h-full bg-white rounded-lg" />;
-          return <p className="text-white/70">Aperçu indisponible pour ce format. Utilisez « Télécharger ».</p>;
-        })()}
+      <div
+        className={`flex-1 min-h-0 p-4 ${isPdf ? 'flex' : 'flex items-center justify-center'}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {!url ? (
+          !resolved ? (
+            <p role="status" className="m-auto text-white/60">Chargement…</p>
+          ) : (
+            <p className="m-auto text-white/70">
+              Aucun fichier déposé pour cette pièce (document historique sans
+              fichier joint).
+            </p>
+          )
+        ) : isPdf ? (
+          <Suspense fallback={<p role="status" className="m-auto text-white/60">Chargement du lecteur PDF…</p>}>
+            <LazyPdfViewer source={url} title={file.name} />
+          </Suspense>
+        ) : type.startsWith('image/') ? (
+          <img
+            src={url}
+            alt={file.name}
+            className="max-h-full max-w-full rounded-lg"
+            referrerPolicy="no-referrer"
+            loading="eager"
+            decoding="async"
+          />
+        ) : type.startsWith('video/') ? (
+          <video
+            src={url}
+            controls
+            className="max-h-full max-w-full rounded-lg"
+          />
+        ) : (
+          <p className="text-white/70">
+            Aperçu indisponible pour ce format. Utilisez « Télécharger ».
+          </p>
+        )}
       </div>
     </dialog>
   );
 }
 
-// ---------- Carte ----------
-// Repère unifié — identique au site public (shared/GeoMapPicker).
-const pin = L.divIcon({
-  className: '',
-  html: `<svg width="30" height="38" viewBox="0 0 28 36" xmlns="http://www.w3.org/2000/svg">
-    <path d="M14 1C6.8 1 1 6.8 1 13.9 1 23.6 14 34.8 14 34.8S27 23.6 27 13.9C27 6.8 21.2 1 14 1Z" fill="#f7c325" stroke="#0b1e42" stroke-width="2"/>
-    <circle cx="14" cy="14" r="5.5" fill="#0b1e42"/>
-  </svg>`,
-  iconSize: [30, 38],
-  iconAnchor: [15, 37],
-});
-const TANA: [number, number] = [-18.8792, 47.5079];
-
-function ClickToPlace({ onPick }: { onPick: (lat: number, lng: number) => void }) {
-  useMapEvents({ click: (e) => onPick(e.latlng.lat, e.latlng.lng) });
-  return null;
-}
-
-export function MapPicker({ lat, lng, onChange, readOnly, height = 'h-80', radiusKm }: {
-  lat?: number; lng?: number; onChange?: (lat: number, lng: number) => void; readOnly?: boolean; height?: string; radiusKm?: number;
+// Carte chargée à la demande : pas de moteur cartographique sur les listes.
+const LazyMapPicker = lazy(() => import('./MapPicker'));
+export function MapPicker(props: {
+  lat?: number; lng?: number; onChange?: (lat: number, lng: number) => void;
+  readOnly?: boolean; height?: string; radiusKm?: number;
 }) {
-  const [satellite, setSatellite] = useState(false); // Plan par défaut — comme le site public
-  const [map, setMap] = useState<L.Map | null>(null);
-  const [geoError, setGeoError] = useState('');
-  // lat/lng peuvent valoir null (recherche publique sans point placé) : on ne garde que des nombres valides.
-  const pos: [number, number] | undefined = typeof lat === 'number' && Number.isFinite(lat) && typeof lng === 'number' && Number.isFinite(lng) ? [lat, lng] : undefined;
-  const set = (a: number, b: number) => onChange?.(Number(a.toFixed(6)), Number(b.toFixed(6)));
-
-  const locate = () => {
-    setGeoError('');
-    if (!navigator.geolocation) return setGeoError('Géolocalisation non disponible sur cet appareil.');
-    navigator.geolocation.getCurrentPosition(
-      (p) => { set(p.coords.latitude, p.coords.longitude); map?.setView([p.coords.latitude, p.coords.longitude], 17); },
-      () => setGeoError('Position introuvable (autorisez la localisation dans le navigateur).'),
-      { enableHighAccuracy: true },
-    );
-  };
-
-  return (
-    <div>
-      {/* isolate : les calques Leaflet restent sous les modales. */}
-      <div className={`relative isolate z-0 ${height} rounded-xl overflow-hidden border border-gray-200`}>
-        <MapContainer center={pos ?? TANA} zoom={pos ? 16 : 11} className="w-full h-full z-0" ref={setMap} scrollWheelZoom>
-          {satellite ? (
-            <TileLayer attribution="Tiles &copy; Esri" url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" maxZoom={19} />
-          ) : (
-            <TileLayer attribution="&copy; OpenStreetMap" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-          )}
-          {!readOnly && <ClickToPlace onPick={set} />}
-          {pos && radiusKm ? <Circle center={pos} radius={radiusKm * 1000} pathOptions={{ color: '#f7c325', weight: 2, fillOpacity: 0.15 }} /> : null}
-          {pos && (
-            <Marker
-              position={pos}
-              icon={pin}
-              draggable={!readOnly}
-              eventHandlers={{ dragend: (e) => { const p = (e.target as L.Marker).getLatLng(); set(p.lat, p.lng); } }}
-            />
-          )}
-        </MapContainer>
-        <div className="absolute top-3 right-3 z-[400] flex flex-col gap-2">
-          <button type="button" onClick={() => setSatellite(!satellite)} className={`${btn} bg-white shadow text-navy-900 hover:bg-gray-50`}>
-            {satellite ? 'Plan' : 'Satellite'}
-          </button>
-          {!readOnly && <button type="button" onClick={locate} className={`${btn} bg-white shadow text-navy-900 hover:bg-gray-50`}>Ma position</button>}
-        </div>
-      </div>
-      {!readOnly && <p className="text-xs text-gray-600 mt-1.5">Cliquez sur la carte ou déplacez le marqueur pour enregistrer la position exacte.</p>}
-      {geoError && <p className="text-xs text-red-600 mt-1">{geoError}</p>}
-    </div>
-  );
+  return <Suspense fallback={<div role="status" className={`${props.height ?? 'h-80'} rounded-xl border border-slate-200 bg-slate-50 grid place-items-center text-xs text-slate-500`}>Chargement de la carte…</div>}><LazyMapPicker {...props}/></Suspense>;
 }
 
 // ---------- Historique et notes ----------
 export function Timeline({ items }: { items: HistoryEntry[] }) {
   const sorted = [...items].sort((a, b) => b.at.localeCompare(a.at));
-  if (!sorted.length) return <p className="text-sm text-gray-600">Aucun historique.</p>;
+  if (!sorted.length)
+    return <p className="text-sm text-gray-600">Aucun historique.</p>;
   return (
     <ol className="relative border-l-2 border-gray-100 ml-2 space-y-4">
       {sorted.map((h) => (
         <li key={h.id} className="pl-4 relative">
-          <span className="absolute -left-[7px] top-1.5 w-3 h-3 rounded-full bg-gold-500 ring-4 ring-white" />
+          <span className="absolute -left-[7px] top-1.5 w-3 h-3 rounded-full bg-navy-900 ring-4 ring-white" />
           <p className="text-sm text-navy-900">{h.text}</p>
-          <p className="text-xs text-gray-600">{fmtDateTime(h.at)} · {h.author}</p>
+          <p className="text-xs text-gray-600">
+            {fmtDateTime(h.at)} · {h.author}
+          </p>
         </li>
       ))}
     </ol>
   );
 }
 
-export function NotesPanel({ notes, onAdd }: { notes: Note[]; onAdd: (n: Note) => void }) {
+export function NotesPanel({
+  notes,
+  onAdd,
+}: {
+  notes: Note[];
+  onAdd: (n: Note) => void;
+}) {
   const [text, setText] = useState('');
   const add = () => {
     if (!text.trim()) return;
-    onAdd({ id: newId(), at: new Date().toISOString(), author: ACTOR, text: text.trim() });
+    onAdd({
+      id: newId(),
+      at: new Date().toISOString(),
+      author: ACTOR,
+      text: text.trim(),
+    });
     setText('');
   };
   return (
     <div className="space-y-3">
       <div className="flex gap-2">
-        <textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="Note interne (non visible par le client)…" className={input} />
-        <button type="button" onClick={add} className={`${btnPrimary} self-start`}>Ajouter</button>
+        <textarea
+          rows={2}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Note interne (non visible par le client)…"
+          className={input}
+        />
+        <button
+          type="button"
+          onClick={add}
+          className={`${btnPrimary} self-start`}
+        >
+          Ajouter
+        </button>
       </div>
-      {[...notes].sort((a, b) => b.at.localeCompare(a.at)).map((n) => (
-        <div key={n.id} className="p-3 rounded-lg bg-amber-50 border border-amber-100">
-          <p className="text-sm whitespace-pre-line">{n.text}</p>
-          <p className="text-xs text-gray-500 mt-1">{fmtDateTime(n.at)} · {n.author}</p>
-        </div>
-      ))}
-      {!notes.length && <p className="text-sm text-gray-600">Aucune note interne.</p>}
+      {[...notes]
+        .sort((a, b) => b.at.localeCompare(a.at))
+        .map((n) => (
+          <div
+            key={n.id}
+            className="p-3 rounded-lg bg-amber-50 border border-amber-100"
+          >
+            <p className="text-sm whitespace-pre-line">{n.text}</p>
+            <p className="text-xs text-gray-500 mt-1">
+              {fmtDateTime(n.at)} · {n.author}
+            </p>
+          </div>
+        ))}
+      {!notes.length && (
+        <p className="text-sm text-gray-600">Aucune note interne.</p>
+      )}
     </div>
   );
 }
@@ -647,51 +1412,102 @@ export function NotesPanel({ notes, onAdd }: { notes: Note[]; onAdd: (n: Note) =
 /* Modale du back office — même habillage que le site public (grandes
    arrondis, en-tête titre + fermeture ronde, pied de modale), et le contenu
    déroule DANS la modale comme les longs formulaires de l'admin. */
-export function Modal({ title, children, onClose, footer, wide }: { title: string; children: ReactNode; onClose: () => void; footer?: ReactNode; wide?: boolean }) {
-  const titleId = useId();
-  const panelRef = useDialogFocus(true, onClose);
+export function Modal({
+  title,
+  children,
+  onClose,
+  wide,
+  footer,
+  kind = 'form',
+}: {
+  title: string;
+  children: ReactNode;
+  onClose: () => void;
+  wide?: boolean;
+  footer?: ReactNode;
+  kind?: 'form' | 'detail';
+}) {
+  const dialog = useRef<HTMLDialogElement>(null),
+    titleId = useId();
   useBodyScrollLock(true);
-
-  return (
-    <div className="fixed inset-0 z-[100] overflow-y-auto overscroll-contain bg-navy-950/40 backdrop-blur-sm">
-      {/* L'overlay défile (pas la carte) : barre de défilement au bord droit de l'écran. */}
-      <div
-        className="flex min-h-full w-full items-end justify-center p-0 sm:items-center sm:p-6"
-        onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
-      >
-        <div
-          ref={panelRef}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby={titleId}
-          tabIndex={-1}
-          className={`w-full rounded-t-[2rem] bg-white shadow-2xl outline-none sm:rounded-[2rem] ${wide ? 'max-w-3xl' : 'max-w-xl'}`}
-          onMouseDown={(event) => event.stopPropagation()}
-        >
-          <div className="sticky top-0 z-10 flex items-start justify-between gap-6 border-b border-navy-900/10 bg-white px-7 pt-6 pb-5">
-            <h2 id={titleId} className="text-xl font-bold tracking-tight text-navy-900">{title}</h2>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Fermer la fenêtre de dialogue"
-              className="rounded-full border border-navy-900/20 p-2.5 text-navy-900/75 transition hover:bg-brand-50 hover:text-navy-900"
-            >
-              <X className="h-4 w-4" aria-hidden="true" />
-            </button>
-          </div>
-          <div className="px-7 pt-6 pb-7">{children}</div>
-          {footer && <div className="sticky bottom-0 flex justify-end gap-2 border-t border-navy-900/10 bg-white px-7 py-4">{footer}</div>}
+  useEffect(() => {
+    const element = dialog.current,
+      previous = document.activeElement as HTMLElement | null;
+    if (element && !element.open) element.showModal();
+    return () => {
+      if (element?.open) element.close();
+      if (previous?.isConnected) previous.focus({ preventScroll: true });
+    };
+  }, []);
+  return createPortal(
+    <dialog
+      ref={dialog}
+      className={`record-modal admin-dialog ${wide ? 'record-modal-wide' : ''}`}
+      aria-labelledby={titleId}
+      onCancel={(e) => {
+        e.preventDefault();
+        onClose();
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          const r = e.currentTarget.getBoundingClientRect();
+          if (
+            e.clientX < r.left ||
+            e.clientX > r.right ||
+            e.clientY < r.top ||
+            e.clientY > r.bottom
+          )
+            onClose();
+        }
+      }}
+    >
+      <header>
+        <div>
+          <p className="record-eyebrow">
+            {kind === 'form'
+              ? 'Formulaire du dossier'
+              : 'Fiche liée au dossier'}
+          </p>
+          <h2 id={titleId}>{title}</h2>
         </div>
-      </div>
-    </div>
+        <button
+          type="button"
+          className={btnIcon}
+          onClick={onClose}
+          aria-label="Fermer"
+        >
+          <X size={18} />
+        </button>
+      </header>
+      <div className="record-modal-content">{children}</div>
+      {footer && (
+        <footer>
+          {kind === 'form' && (
+            <span>Les champs marqués * sont obligatoires.</span>
+          )}
+          <div>{footer}</div>
+        </footer>
+      )}
+    </dialog>,
+    document.body,
   );
 }
 
-export function Stat({ label, value, tone = 'text-navy-900' }: { label: string; value: ReactNode; tone?: string }) {
+export function Stat({
+  label,
+  value,
+  tone = 'text-navy-900',
+}: {
+  label: string;
+  value: ReactNode;
+  tone?: string;
+}) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-4">
+    <div className="admin-surface bg-white rounded-lg border border-slate-200 px-4 py-3">
       <p className="text-xs text-gray-500">{label}</p>
-      <p className={`text-xl font-bold mt-1 ${tone}`}>{value}</p>
+      <p className={`text-xl font-semibold tabular-nums mt-1 ${tone}`}>
+        {value}
+      </p>
     </div>
   );
 }
@@ -700,17 +1516,35 @@ export function Info({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div>
       <dt className="text-xs text-gray-500">{label}</dt>
-      <dd className="text-sm text-navy-900 font-medium mt-0.5 break-words">{value || '—'}</dd>
+      <dd className="text-sm text-navy-900 font-medium mt-0.5 break-words">
+        <RecordValue value={value} label={label} />
+      </dd>
     </div>
   );
 }
 
 /** Filtre de date compact avec libellé intégré (« Du » / « Au »). */
-export function DateFilter({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+export function DateFilter({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
   return (
     <div className="relative min-w-0">
-      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-gray-600 pointer-events-none">{label}</span>
-      <input type="date" value={value} onChange={(e) => onChange(e.target.value)} className={`${input} pl-9 min-w-0`} aria-label={label} />
+      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-gray-600 pointer-events-none">
+        {label}
+      </span>
+      <input
+        type="date"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={`${input} pl-9 min-w-0`}
+        aria-label={label}
+      />
     </div>
   );
 }
@@ -726,52 +1560,128 @@ export { PageHeader } from '../ui';
  * et exports Excel / PDF / Imprimer — toujours au même endroit.
  */
 export function ListToolbar<T>({
-  q, onQ, placeholder, filters, activeFilters = 0, bulk,
-  exportRows, exportColumns, exportName, exportTitle,
+  q,
+  onQ,
+  placeholder,
+  filters,
+  activeFilters = 0,
+  bulk,
+  onReset,
+  extra,
+  exportRows,
+  exportColumns,
+  exportName,
+  exportTitle,
 }: {
   q: string;
   onQ: (v: string) => void;
   placeholder?: string;
-  /** Contenu du panneau de filtres ; affiche le bouton « Filtres » s'il est fourni. */
   filters?: ReactNode;
-  /** Nombre de filtres actifs (pastille sur le bouton « Filtres »). */
   activeFilters?: number;
-  /** Zone d'actions groupées (affichée à gauche des exports). */
   bulk?: ReactNode;
-  /** Lignes à exporter (sélection si présente, sinon lignes filtrées). */
+  onReset?: () => void;
+  extra?: ReactNode;
   exportRows?: () => T[];
   exportColumns?: Column<T>[];
   exportName?: string;
   exportTitle?: string;
 }) {
-  const [open, setOpen] = useState(false);
-  const canExport = !!(exportRows && exportColumns);
-  const title = exportTitle ?? exportName ?? 'Liste';
+  const { pathname: toolbarScope } = useLocation();
+  const [open, setOpen] = useCollectionState(
+      toolbarScope,
+      'filtersOpen',
+      false,
+    ),
+    id = useId();
+  const canExport = !!(exportRows && exportColumns),
+    title = exportTitle ?? exportName ?? 'Liste';
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 mb-4 space-y-3">
-      <div className="relative">
-        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-600" />
-        <input value={q} onChange={(e) => onQ(e.target.value)} placeholder={placeholder ?? 'Rechercher…'} className={`${input} pl-9 ${filters ? 'pr-28' : ''}`} />
+    <div className="admin-toolbar">
+      <div className="admin-toolbar-main">
+        <label className="admin-toolbar-search">
+          <span className="sr-only">Rechercher dans la collection</span>
+          <Search aria-hidden="true" />
+          <input
+            value={q}
+            onChange={(e) => onQ(e.target.value)}
+            placeholder={placeholder ?? 'Rechercher…'}
+            className={input}
+          />
+        </label>
         {filters && (
           <button
             type="button"
-            onClick={() => setOpen((v) => !v)}
-            className={`absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${open ? 'bg-navy-900 text-white' : 'text-navy-900 hover:bg-gray-100'}`}
+            className={btnOutline}
+            aria-expanded={open}
+            aria-controls={id}
+            onClick={() => setOpen(!open)}
           >
-            <SlidersHorizontal className="w-3.5 h-3.5" /> Filtres
-            {activeFilters > 0 && <span className="grid h-4 min-w-4 place-items-center rounded-full bg-gold-500 px-1 text-[10px] font-bold text-navy-900">{activeFilters}</span>}
+            <SlidersHorizontal size={14} />
+            Filtres
+            {activeFilters > 0 && (
+              <span className="text-xs bg-slate-100 rounded px-1.5">
+                {activeFilters}
+              </span>
+            )}
+          </button>
+        )}
+        {extra}
+        {(q || activeFilters > 0) && (
+          <button
+            type="button"
+            className={btnOutline}
+            onClick={() => {
+              onQ('');
+              onReset?.();
+            }}
+          >
+            Effacer {onReset ? 'les filtres' : 'la recherche'}
           </button>
         )}
       </div>
-      {filters && open && <div className="grid grid-cols-2 md:grid-cols-4 gap-2">{filters}</div>}
+      {filters && open && (
+        <div className="admin-toolbar-filters" id={id}>
+          {filters}
+        </div>
+      )}
       {(bulk || canExport) && (
-        <div className="flex flex-wrap items-center gap-2 pt-1">
+        <div className="admin-toolbar-secondary">
           {bulk}
           {canExport && (
-            <div className="flex gap-2 ml-auto">
-              <button className={btnOutline} onClick={() => exportCsv(exportRows!(), exportColumns!, exportName ?? 'export')}><FileSpreadsheet className="w-4 h-4" /> Excel</button>
-              <button className={btnOutline} onClick={() => printTable(exportRows!(), exportColumns!, title)}><FileDown className="w-4 h-4" /> PDF</button>
-              <button className={btnOutline} onClick={() => printTable(exportRows!(), exportColumns!, title)}><Printer className="w-4 h-4" /> Imprimer</button>
+            <div className="admin-toolbar-exports">
+              <RecordMenu label="Exporter les résultats">
+                <button
+                  type="button"
+                  onClick={() =>
+                    exportCsv(
+                      exportRows!(),
+                      exportColumns!,
+                      exportName ?? 'export',
+                    )
+                  }
+                >
+                  <FileSpreadsheet size={15} />
+                  CSV / Excel
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    printTable(exportRows!(), exportColumns!, title)
+                  }
+                >
+                  <FileDown size={15} />
+                  PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    printTable(exportRows!(), exportColumns!, title)
+                  }
+                >
+                  <Printer size={15} />
+                  Imprimer
+                </button>
+              </RecordMenu>
             </div>
           )}
         </div>

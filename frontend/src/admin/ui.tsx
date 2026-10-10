@@ -1,34 +1,73 @@
 import { ReactNode } from 'react';
-import type { RequestStatus } from '../lib/store';
 import { formatDateTime } from '../lib/format';
-import { ADMIN_BADGE_BASE, ADMIN_BUTTON_GHOST, ADMIN_BUTTON_PRIMARY, ADMIN_INPUT, ADMIN_SURFACE } from './tokens';
+import type { RequestStatus } from '../lib/store';
 import { adminStatusClass } from './status';
+import {
+  ADMIN_BADGE_BASE,
+  ADMIN_BUTTON_GHOST,
+  ADMIN_BUTTON_PRIMARY,
+  ADMIN_INPUT,
+  ADMIN_SURFACE,
+} from './tokens';
+export {
+  FormFooter,
+  RecordCard,
+  RecordHeader,
+  RecordIdentity,
+  RecordMenu,
+  SummaryStrip,
+} from './records';
 
-export function PageHeader({ title, subtitle, action }: { title: string; subtitle?: string; action?: ReactNode }) {
+export function PageHeader({
+  title,
+  subtitle,
+  action,
+}: {
+  title: string;
+  subtitle?: string;
+  action?: ReactNode;
+}) {
   return (
-    <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
-      <div>
-        <h1 className="text-2xl font-bold font-display text-navy-900">{title}</h1>
-        {subtitle && <p className="text-sm text-gray-500 mt-1">{subtitle}</p>}
+    <header className="record-page-header" data-record-header="collection">
+      <p className="record-eyebrow">Espace de gestion / Collections</p>
+      <div className="record-header-main">
+        <div className="min-w-0">
+          <div className="record-title-line">
+            <h1>{title}</h1>
+          </div>
+          {subtitle && <p className="record-header-context">{subtitle}</p>}
+        </div>
+        {action && <div className="record-header-actions">{action}</div>}
       </div>
-      {action}
-    </div>
+    </header>
   );
 }
 
-export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
+export function Card({
+  children,
+  className = '',
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
   return <div className={`${ADMIN_SURFACE} ${className}`}>{children}</div>;
 }
 
 export function Badge({ value }: { value: string }) {
   return (
-    <span className={`${ADMIN_BADGE_BASE} capitalize font-semibold ${adminStatusClass(value)}`}>
+    <span
+      className={`${ADMIN_BADGE_BASE} capitalize font-medium ${adminStatusClass(value)}`}
+    >
       {value}
     </span>
   );
 }
 
-export const REQUEST_STATUSES: RequestStatus[] = ['nouveau', 'traité', 'archivé'];
+export const REQUEST_STATUSES: RequestStatus[] = [
+  'nouveau',
+  'traité',
+  'archivé',
+];
 
 export function formatDate(iso: string) {
   return formatDateTime(iso);

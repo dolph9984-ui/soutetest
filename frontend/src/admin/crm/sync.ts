@@ -9,8 +9,8 @@
    ========================================================================== */
 
 import { bootstrap } from '../../services/adminService';
-import { notice } from './dialog';
 import type { ContactMessage, Land } from '../../types';
+import { notice } from './dialog';
 import type { BuyRequest, LandFile } from './model';
 import type { Client, Realisation, SpecificSearch } from './people';
 
@@ -27,6 +27,20 @@ export const cache = {
 let presentationAllowed = false;
 export const canLoadPresentation = () => presentationAllowed;
 
+let refreshError = '';
+const syncListeners = new Set<() => void>();
+export const getRefreshError = () => refreshError;
+export function subscribeSyncState(fn: () => void) {
+  syncListeners.add(fn);
+  return () => {
+    syncListeners.delete(fn);
+  };
+}
+function setRefreshError(message: string) {
+  refreshError = message;
+  syncListeners.forEach((fn) => fn());
+}
+
 let hydrated = false;
 export const isHydrated = () => hydrated;
 
@@ -36,7 +50,9 @@ export const isHydrated = () => hydrated;
 const listeners = new Set<() => void>();
 export function subscribeCache(fn: () => void): () => void {
   listeners.add(fn);
-  return () => { listeners.delete(fn); };
+  return () => {
+    listeners.delete(fn);
+  };
 }
 const notifyCache = () => listeners.forEach((fn) => fn());
 
@@ -77,19 +93,34 @@ export function refreshCache(force = false): Promise<void> {
     .then((data) => {
       // Les saisies optimistes pas encore confirmées par l'API sont préservées.
       const pending = Object.fromEntries(
-        (Object.keys(cache) as (keyof typeof cache)[]).map((k) => [k, (cache[k] as { id: string }[]).filter((x) => x.id.startsWith('tmp-'))]),
+        (Object.keys(cache) as (keyof typeof cache)[]).map((k) => [
+          k,
+          (cache[k] as { id: string }[]).filter((x) => x.id.startsWith('tmp-')),
+        ]),
       );
       hydrate(data as never);
+      setRefreshError('');
       for (const k of Object.keys(pending) as (keyof typeof cache)[]) {
-        (cache[k] as { id: string }[]).unshift(...(pending[k] as { id: string }[]));
+        (cache[k] as { id: string }[]).unshift(
+          ...(pending[k] as { id: string }[]),
+        );
       }
     })
-    .catch(() => { /* API injoignable : on garde le cache actuel */ })
-    .finally(() => { refreshing = null; });
+    .catch((error) => {
+      setRefreshError(
+        error instanceof Error
+          ? error.message
+          : 'Impossible d’actualiser les données.',
+      ); /* Dernier cache confirmé conservé. */
+    })
+    .finally(() => {
+      refreshing = null;
+    });
   return refreshing;
 }
 
 export function resetCache() {
+  setRefreshError('');
   hydrate({});
   hydrated = false;
 }
@@ -112,18 +143,29 @@ export function upsertSync<K extends keyof typeof cache>(
 ): void {
   const list = cache[key] as { id: string }[];
   const target = serverItem ?? item;
-  const i = list.findIndex((x) => x.id === item.id || (serverItem && x.id === serverItem.id));
-  cache[key] = (i >= 0 ? list.map((x, idx) => (idx === i ? target : x)) : [target, ...list]) as never;
+  const i = list.findIndex(
+    (x) => x.id === item.id || (serverItem && x.id === serverItem.id),
+  );
+  cache[key] = (
+    i >= 0 ? list.map((x, idx) => (idx === i ? target : x)) : [target, ...list]
+  ) as never;
   notifyCache();
 }
 
-export function replaceSync<K extends keyof typeof cache>(key: K, tempId: string, serverItem: (typeof cache)[K][number]): void {
+export function replaceSync<K extends keyof typeof cache>(
+  key: K,
+  tempId: string,
+  serverItem: (typeof cache)[K][number],
+): void {
   const list = cache[key] as { id: string }[];
   cache[key] = list.map((x) => (x.id === tempId ? serverItem : x)) as never;
   notifyCache();
 }
 
-export function removeSync<K extends keyof typeof cache>(key: K, id: string): void {
+export function removeSync<K extends keyof typeof cache>(
+  key: K,
+  id: string,
+): void {
   const list = cache[key] as { id: string }[];
   cache[key] = list.filter((x) => x.id !== id) as never;
   notifyCache();
@@ -136,12 +178,13 @@ let lastWarn = 0;
 export function warnSyncFailed(what: string): void {
   console.error(`Échec de l'enregistrement API : ${what}`);
   const t = Date.now();
-  if (t - lastWarn > 4000) { // une seule alerte par rafale
+  if (t - lastWarn > 4000) {
+    // une seule alerte par rafale
     lastWarn = t;
     void notice(
       `⚠️ « ${what} » n'a pas pu être enregistré sur le serveur.\n\n` +
-      `La donnée est affichée localement mais sera PERDUE au rechargement de la page.\n` +
-      `Vérifiez que l'API backend est démarrée et accessible, puis réessayez.`,
+        `La donnée est affichée localement mais sera PERDUE au rechargement de la page.\n` +
+        `Vérifiez que l'API backend est démarrée et accessible, puis réessayez.`,
     );
   }
 }
