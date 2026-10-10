@@ -607,15 +607,42 @@ export function adminPreviewPlugin(): Plugin {
             return json(res, 404, {
               message: 'Fichier d’aperçu introuvable.',
             });
-          res.setHeader('Content-Type', f.type);
+          const forceDownload = new URL(req.url ?? '/', 'http://preview.local')
+            .searchParams.get('download') === '1';
+          if (forceDownload) {
+            res.setHeader('Content-Type', f.type);
+            res.setHeader(
+              'Content-Disposition',
+              `attachment; filename*=UTF-8''${encodeURIComponent(f.name)}`,
+            );
+          } else {
+            // ANTI-IDM : on cache le type et le nom pour éviter que le
+            // gestionnaire de téléchargement n'intercepte la requête.
+            // Le frontend détecte le PDF via sa signature binaire (%PDF-).
+            res.setHeader('Content-Type', 'application/octet-stream');
+            res.setHeader('Content-Disposition', 'inline');
+          }
           res.setHeader('Content-Length', f.content.length);
           res.setHeader('Cache-Control', 'no-store');
-          res.setHeader(
-            'Content-Disposition',
-            `inline; filename*=UTF-8''${encodeURIComponent(f.name)}`,
-          );
           res.end(f.content);
           return;
+        }
+        // Endpoint base64 : retourne le fichier encodé en base64 dans un JSON
+        // pour contourner IDM qui intercepte toutes les réponses PDF directes.
+        if (path.startsWith('/admin/files-raw/') && method === 'GET') {
+          const f = attachments.get(
+            decodeURIComponent(path.slice('/admin/files-raw/'.length)),
+          );
+          if (!f)
+            return json(res, 404, {
+              message: 'Fichier dapercu introuvable.',
+            });
+          const base64 = f.content.toString('base64');
+          return json(res, 200, {
+            data: base64,
+            type: f.type,
+            size: f.content.length,
+          });
         }
         if (path === '/admin/uploads' && method === 'POST') {
           const raw = await body(req),

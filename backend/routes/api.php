@@ -31,6 +31,10 @@ Route::prefix('v1')->group(function () {
         Route::middleware(['auth:sanctum', 'abilities:admin'])->group(function () {
             Route::get('/me', [Admin\AuthController::class, 'me']);
             Route::get('/files/{path}', [Admin\PrivateFileController::class, 'show'])->where('path', '.*');
+            // Endpoint base64 pour les fichiers : encapsulé dans du JSON pour
+            // contourner IDM (Internet Download Manager) qui intercepte toutes
+            // les réponses PDF directes, même avec Content-Type octet-stream.
+            Route::get('/files-raw/{path}', [Admin\PrivateFileRawController::class, 'show'])->where('path', '.*');
             Route::post('/logout', [Admin\AuthController::class, 'logout']);
             Route::get('/stats', [Admin\StatsController::class, 'index']);
             Route::get('/bootstrap', [Admin\BootstrapController::class, 'index']);

@@ -256,6 +256,7 @@ const loadPurchaseRequests = () =>
 
 export function BuyRequestList() {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
   const [rows, setRows] = useState(loadPurchaseRequests);
   useEffect(() => {
     refreshCache().then(() => setRows(loadPurchaseRequests()));
@@ -278,6 +279,14 @@ export function BuyRequestList() {
     [],
   );
   const [bulkStatus, setBulkStatus] = useState('');
+  // Pré-filtrage depuis l'URL (ex: lien « Achats nouveaux » du tableau de bord
+  // envoie ?status=Nouvelle pour afficher directement les demandes récentes).
+  useEffect(() => {
+    const urlStatus = params.get('status');
+    if (urlStatus && urlStatus !== f.status) {
+      setF({ ...f, status: urlStatus });
+    }
+  }, [params]); // eslint-disable-line react-hooks/exhaustive-deps
   const set = (k: keyof typeof f, v: string | number) => setF({ ...f, [k]: v });
 
   const filtered = useMemo(() => {

@@ -62,7 +62,7 @@ import {
   ADMIN_SURFACE,
 } from '../tokens';
 import { notice } from './dialog';
-import { downloadFile, formatSize, putFile, useFileUrl } from './files';
+import { downloadFile, formatSize, getFileBytes, putFile, useFileUrl } from './files';
 import type { HistoryEntry, Note, StoredFile } from './model';
 import { ACTOR } from './model';
 
@@ -1227,8 +1227,52 @@ export function Preview({
   file: StoredFile | null;
   onClose: () => void;
 }) {
-  const { url, resolved } = useFileUrl(file ?? undefined, true);
+  const type = file?.type ?? '';
+  const isPdf = file
+    ? /^application\/pdf(?:\s*;|$)/i.test(type) || /\.pdf$/i.test(file.name)
+    : false;
+
+  // IMPORTANT : on n'appelle useFileUrl QUE pour les images/vidéos.
+  // Pour les PDFs, on utilise getFileBytes (endpoint base64) qui contourne IDM.
+  // Si on appelait useFileUrl pour les PDFs aussi, il déclencherait l'ancien
+  // endpoint /admin/files/ et IDM intercepterait la requête.
+  const { url, resolved } = useFileUrl(
+    isPdf ? undefined : (file ?? undefined),
+    true,
+  );
+
+  // Données binaires directes pour les PDFs via endpoint base64.
+  const [pdfData, setPdfData] = useState<Uint8Array | undefined>();
+  const [pdfResolved, setPdfResolved] = useState(false);
+  const [pdfLoading, setPdfLoading] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    if (!file || !isPdf) {
+      setPdfData(undefined);
+      setPdfResolved(true);
+      return;
+    }
+    let alive = true;
+    setPdfData(undefined);
+    setPdfResolved(false);
+    setPdfLoading(true);
+    getFileBytes(file)
+      .then((bytes) => {
+        if (!alive) return;
+        setPdfData(bytes);
+        setPdfResolved(true);
+        setPdfLoading(false);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setPdfData(undefined);
+        setPdfResolved(true);
+        setPdfLoading(false);
+      });
+    return () => { alive = false; };
+  }, [file?.id, file?.url, isPdf]);
+
   useEffect(() => {
     const element = dialog.current;
     if (!file || !element) return;
@@ -1243,8 +1287,11 @@ export function Preview({
     };
   }, [file?.id]);
   if (!file) return null;
-  const type = file.type ?? '';
-  const isPdf = /^application\/pdf(?:\s*;|$)/i.test(type) || /\.pdf$/i.test(file.name);
+
+  // Pour les PDFs, on utilise pdfData/pdfResolved ; pour le reste, url/resolved.
+  const ready = isPdf ? pdfResolved : resolved;
+  const hasContent = isPdf ? !!pdfData : !!url;
+
   return (
     <dialog
       ref={dialog}
@@ -1262,7 +1309,7 @@ export function Preview({
       >
         <span className="truncate">{file.name}</span>
         <div className="flex gap-2">
-          {(url || !resolved) && (
+          {(hasContent || !ready) && (
             <button
               type="button"
               className={`${btn} bg-white/10 hover:bg-white/20`}
@@ -1285,18 +1332,37 @@ export function Preview({
         className={`flex-1 min-h-0 p-4 ${isPdf ? 'flex' : 'flex items-center justify-center'}`}
         onClick={(e) => e.stopPropagation()}
       >
-        {!url ? (
-          !resolved ? (
-            <p role="status" className="m-auto text-white/60">Chargement…</p>
-          ) : (
-            <p className="m-auto text-white/70">
-              Aucun fichier déposé pour cette pièce (document historique sans
-              fichier joint).
+        {!hasContent ? (
+          !ready ? (
+            <p role="status" className="m-auto text-white/60">
+              {pdfLoading ? 'Chargement du PDF…' : 'Chargement…'}
             </p>
+          ) : (
+            <div className="m-auto max-w-md text-center text-white/70">
+              {isPdf ? (
+                <>
+                  <p className="text-lg mb-2">⚠ Impossible de charger ce PDF</p>
+                  <p className="text-sm text-white/60">
+                    Les données sont vides ou le fichier est introuvable.
+                  </p>
+                  <p className="text-xs text-white/50 mt-3">
+                    Vérifiez la console (F12) pour les détails techniques.
+                  </p>
+                  <p className="text-xs text-white/50 mt-1">
+                    Essayez de télécharger le fichier et de l'ouvrir localement.
+                  </p>
+                </>
+              ) : (
+                <p>
+                  Aucun fichier déposé pour cette pièce (document historique sans
+                  fichier joint).
+                </p>
+              )}
+            </div>
           )
-        ) : isPdf ? (
+        ) : isPdf && pdfData ? (
           <Suspense fallback={<p role="status" className="m-auto text-white/60">Chargement du lecteur PDF…</p>}>
-            <LazyPdfViewer source={url} title={file.name} />
+            <LazyPdfViewer data={pdfData} title={file.name} />
           </Suspense>
         ) : type.startsWith('image/') ? (
           <img

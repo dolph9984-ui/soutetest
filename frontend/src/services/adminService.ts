@@ -244,9 +244,72 @@ export async function fetchProtectedFile(url: string): Promise<Blob> {
     setToken(null);
     throw new ApiError('Session expirée — reconnectez-vous.', res.status);
   }
-  if (!res.ok)
+  if (!res.ok) {
+    // Log détaillé pour diagnostiquer les erreurs de fichiers
+    const contentType = res.headers.get('content-type') || '(absent)';
+    const contentLength = res.headers.get('content-length') || '(absent)';
+    console.error(
+      `[fetchProtectedFile] Erreur HTTP ${res.status} pour ${url}`,
+      `\n  Content-Type : ${contentType}`,
+      `\n  Content-Length : ${contentLength}`,
+      `\n  Status text : ${res.statusText}`,
+    );
     throw new ApiError(`Fichier indisponible (${res.status}).`, res.status);
-  return res.blob();
+  }
+  const blob = await res.blob();
+  if (blob.size === 0) {
+    // Diagnostic : le serveur a retourné 200 mais le corps est vide
+    const contentType = res.headers.get('content-type') || '(absent)';
+    const contentLength = res.headers.get('content-length') || '(absent)';
+    console.error(
+      `[fetchProtectedFile] Blob vide pour ${url}`,
+      `\n  Content-Type : ${contentType}`,
+      `\n  Content-Length : ${contentLength}`,
+      `\n  Response type : ${res.type}`,
+      `\n  Response URL : ${res.url}`,
+    );
+  }
+  return blob;
+}
+
+/**
+ * Récupère un fichier protégé encodé en base64 dans un JSON.
+ * Utilisé pour contourner IDM (Internet Download Manager) qui intercepte
+ * toutes les réponses PDF directes, même avec Content-Type octet-stream.
+ * En encapsulant le PDF dans du JSON, IDM ne voit jamais de fichier.
+ */
+export async function fetchProtectedFileRaw(
+  url: string
+): Promise<{ data: Uint8Array; type: string; size: number }> {
+  // Convertir l'URL /api/v1/admin/files/... en /api/v1/admin/files-raw/...
+  const rawUrl = url.replace('/api/v1/admin/files/', '/api/v1/admin/files-raw/');
+  const token = getToken();
+
+  const res = await fetchWithPreviewSession(rawUrl, {
+    headers: {
+      Accept: 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  }, true);
+
+  if (res.status === 401 || res.status === 403) {
+    setToken(null);
+    throw new ApiError('Session expirée — reconnectez-vous.', res.status);
+  }
+  if (!res.ok) {
+    console.error(
+      `[fetchProtectedFileRaw] Erreur HTTP ${res.status} pour ${rawUrl}`,
+    );
+    throw new ApiError(`Fichier indisponible (${res.status}).`, res.status);
+  }
+
+  const json = await res.json() as { data: string; type: string; size: number };
+  const binaryString = atob(json.data);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return { data: bytes, type: json.type, size: json.size };
 }
 
 export async function uploadFile(

@@ -327,9 +327,7 @@ export default function AdminLayout() {
                 </button>
               </>
             )}
-            <span className="admin-user-avatar hidden sm:grid h-8 w-8 place-items-center rounded-full bg-slate-100 text-[10px] font-semibold">
-              CA
-            </span>
+
           </div>
         </header>
         <main className="min-w-0 w-full max-w-[1680px] p-4 sm:p-7 lg:p-8 mx-auto">

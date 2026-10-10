@@ -22,7 +22,7 @@ import {
   User,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { formatPhone, phoneHref } from '../lib/phone';
 import { getLands } from '../lib/store';
 import {
@@ -151,6 +151,7 @@ const columns: Column<BuyRequest>[] = [
 
 export function VisitList() {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
   const [rows, setRows] = useState(getVisitRequests);
   useEffect(() => {
     refreshCache().then(() => setRows(getVisitRequests()));
@@ -158,6 +159,14 @@ export function VisitList() {
   }, []); // resync à l'ouverture + mise à jour auto sans F5
   const [q, setQ] = useCollectionState(BASE, 'q', '');
   const [status, setStatus] = useCollectionState(BASE, 'status', '');
+  // Pré-filtrage depuis l'URL (ex: lien « Visites à confirmer » du tableau
+  // de bord envoie ?status=Demandée pour voir les visites non confirmées).
+  useEffect(() => {
+    const urlStatus = params.get('status');
+    if (urlStatus && urlStatus !== status) {
+      setStatus(urlStatus);
+    }
+  }, [params]); // eslint-disable-line react-hooks/exhaustive-deps
   const [selected, setSelected] = useCollectionState<string[]>(
     BASE,
     'selected',

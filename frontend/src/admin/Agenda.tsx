@@ -20,7 +20,7 @@ import {
   User,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { formatTime } from '../lib/format';
 import { phoneHref } from '../lib/phone';
 import { getLands } from '../lib/store';
@@ -133,14 +133,20 @@ function dayLabel(key: string) {
 type View = 'upcoming' | 'late' | 'done';
 
 export default function Agenda() {
+  const [params] = useSearchParams();
+  const urlView = params.get('view');
+  const initialView = (urlView === 'late' || urlView === 'done' || urlView === 'upcoming') ? urlView : 'upcoming';
   const [version, setVersion] = useState(0);
   const items = useMemo(collect, [version]);
   useEffect(() => {
     refreshCache().then(() => setVersion((v) => v + 1));
     return subscribeCache(() => setVersion((v) => v + 1));
   }, []); // mise à jour auto sans F5
-  const [view, setView] = useState<View>('upcoming');
-  const [mode, setModeState] = useState<'calendar' | 'list'>(() => {
+  const [view, setView] = useState<View>(initialView);
+  const [modeState, setModeState] = useState<'calendar' | 'list'>(() => {
+    // Si un paramètre URL force une vue spécifique (ex: ?view=late depuis le tableau de bord),
+    // on passe automatiquement en mode liste pour afficher les éléments filtrés.
+    if (initialView !== 'upcoming') return 'list';
     try {
       return localStorage.getItem('caimmo.agenda.mode') === 'list'
         ? 'list'
@@ -157,6 +163,7 @@ export default function Agenda() {
       /* préférence non enregistrée */
     }
   };
+  const mode = modeState;
   const [type, setType] = useState('');
   const [kind, setKind] = useState('');
   const [q, setQ] = useState('');

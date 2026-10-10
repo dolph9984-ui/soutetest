@@ -1,6 +1,6 @@
 import { Mail, Pencil, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { formatPhone, phoneHref } from '../lib/phone';
 import {
   ContactMessage,
@@ -104,6 +104,7 @@ const columns: Column<ContactMessage>[] = [
 
 export function AdminMessages() {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
   const [items, setItems] = useState(getMessages),
     [selected, setSelected] = useState<string[]>([]);
   const [filter, setFilter] = useCollectionState(BASE, 'status', ''),
@@ -113,6 +114,14 @@ export function AdminMessages() {
     refreshCache().then(() => setItems(getMessages()));
     return subscribeCache(() => setItems(getMessages()));
   }, []);
+  // Pré-filtrage depuis l'URL (ex: lien « Messages non lus » du tableau de
+  // bord envoie ?status=nouveau pour afficher directement les non traités).
+  useEffect(() => {
+    const urlStatus = params.get('status');
+    if (urlStatus && urlStatus !== filter) {
+      setFilter(urlStatus);
+    }
+  }, [params]); // eslint-disable-line react-hooks/exhaustive-deps
   const shown = items
     .filter(
       (m) =>

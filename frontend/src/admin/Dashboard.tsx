@@ -115,7 +115,7 @@ export default function Dashboard() {
       sub: `${dueToday.length} prévue(s) aujourd'hui`,
       icon: CalendarDays,
       tint: late.length ? 'bg-red-50 text-red-700' : 'bg-slate-100 text-navy-900',
-      to: '/admin/agenda',
+      to: '/admin/agenda?view=late',
     },
     {
       label: 'Disponibles',
@@ -131,7 +131,7 @@ export default function Dashboard() {
       sub: 'demandes à qualifier',
       icon: ShoppingBag,
       tint: 'bg-blue-50 text-blue-700',
-      to: '/admin/achats',
+      to: '/admin/achats?status=Nouvelle',
     },
     {
       label: 'Visites à confirmer',
@@ -139,7 +139,7 @@ export default function Dashboard() {
       sub: 'créneaux à rappeler',
       icon: CalendarCheck,
       tint: 'bg-amber-50 text-amber-700',
-      to: '/admin/visites',
+      to: '/admin/visites?status=Demand%C3%A9e',
     },
     {
       label: 'Messages non lus',
@@ -147,7 +147,7 @@ export default function Dashboard() {
       sub: `${messages.length} au total`,
       icon: Mail,
       tint: 'bg-indigo-50 text-indigo-700',
-      to: '/admin/messages',
+      to: '/admin/messages?status=nouveau',
     },
   ];
 
@@ -202,8 +202,9 @@ export default function Dashboard() {
       />
       {late.length > 0 && (
         <p className="text-sm text-red-700 border border-red-200 bg-red-50 rounded-lg p-3 mb-5">
-          {late.length} action(s) en retard. Commencez par le suivi dans
-          l’agenda.
+          {late.length} action(s) en retard. <Link to="/admin/agenda?view=late" className="font-semibold underline hover:text-red-900 transition-colors">
+            Voir la liste →
+          </Link>
         </p>
       )}
       {/* — Cartes statistiques — */}

@@ -1,20 +1,31 @@
 import { ChevronLeft, ChevronRight, Minus, Plus, ScanLine } from 'lucide-react';
-import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
+import { getDocument, GlobalWorkerOptions, version } from 'pdfjs-dist';
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
-import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { useEffect, useRef, useState } from 'react';
 
-GlobalWorkerOptions.workerSrc = workerUrl;
+// Worker : on préfère le fichier local servi par Vite, avec un repli CDN
+// si le worker Vite ne charge pas (certains environnements bloquent les
+// workers depuis node_modules). Le CDN garantit que le worker est toujours
+// disponible — sans lui, AUCUN pdf ne s'affiche.
+import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+
+try {
+  GlobalWorkerOptions.workerSrc = workerUrl;
+} catch {
+  // Repli CDN si le worker local ne peut pas être défini
+  GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${version}/build/pdf.worker.min.mjs`;
+}
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 2;
 const ZOOM_STEP = 0.15;
 
 export default function PdfViewer({
-  source,
+  data,
   title,
 }: {
-  source: string;
+  /** Données binaires brutes du PDF, chargées directement depuis le serveur. */
+  data: Uint8Array;
   title: string;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -29,9 +40,12 @@ export default function PdfViewer({
   const [rendering, setRendering] = useState(false);
   const [error, setError] = useState('');
 
+  // Chargement du PDF directement depuis les bytes :
+  // pas de blob, pas de blob URL, pas de fetch intermédiaire.
+  // Les données arrivent du serveur → Uint8Array → pdfjs.
   useEffect(() => {
     let active = true;
-    const task = getDocument({ url: source });
+    let task: ReturnType<typeof getDocument> | undefined;
     documentRef.current = null;
     setPdf(null);
     setPageNumber(1);
@@ -40,8 +54,60 @@ export default function PdfViewer({
     setError('');
     setLoading(true);
 
-    task.promise
-      .then((document) => {
+    void (async () => {
+      try {
+        // Vérification : données vides ou manquantes
+        if (!data || data.length === 0) {
+          console.error(
+            '[PdfViewer] Données vides pour « ' + title + ' »',
+            '\n  Le fichier n\'a pas pu être récupéré depuis le serveur.',
+            '\n  Vérifiez la console pour les messages de fetchProtectedFile/getFileBytes.',
+          );
+          if (active) {
+            setError(
+              'Impossible de charger ce fichier. Les données reçues sont vides.\n' +
+              'Vérifiez la console (F12) pour les détails.',
+            );
+            setLoading(false);
+          }
+          return;
+        }
+
+        // Vérification de la signature PDF (%PDF-)
+        if (data.length < 5 ||
+            data[0] !== 0x25 || // %
+            data[1] !== 0x50 || // P
+            data[2] !== 0x44 || // D
+            data[3] !== 0x46) { // F
+          const preview = new TextDecoder('utf-8', { fatal: false })
+            .decode(data.slice(0, 200));
+          console.error(
+            '[PdfViewer] Les données reçues ne sont pas un PDF.',
+            'Début du contenu :',
+            preview.slice(0, 100),
+            'Taille :',
+            data.length,
+            'bytes',
+          );
+          if (active) {
+            setError(
+              'Le fichier reçu n\'est pas un PDF valide. ' +
+              'Vérifiez la console (F12) pour les détails.',
+            );
+            setLoading(false);
+          }
+          return;
+        }
+
+        console.info(
+          `[PdfViewer] Chargement de « ${title} » — ${data.length} bytes`,
+        );
+
+        task = getDocument({
+          data: data.slice(), // copie pour que pdfjs puisse gérer la mémoire
+          isEvalSupported: false,
+        });
+        const document = await task.promise;
         if (!active) {
           void document.destroy();
           return;
@@ -50,22 +116,50 @@ export default function PdfViewer({
         setPdf(document);
         setPageCount(document.numPages);
         setLoading(false);
-      })
-      .catch(() => {
-        if (!active) return;
-        setError(
-          'Ce PDF ne peut pas être affiché. Il est peut-être endommagé ou protégé par mot de passe.',
+        console.info(
+          `[PdfViewer] « ${title} » chargé — ${document.numPages} page(s)`,
         );
+      } catch (reason) {
+        if (!active) return;
+        // Diagnostic détaillé dans la console
+        const errMessage =
+          reason instanceof Error ? reason.message : String(reason);
+        const errName =
+          reason instanceof Error ? reason.constructor.name : 'Unknown';
+        console.error(
+          `[PdfViewer] Erreur de chargement PDF « ${title} » :`,
+          `\n  Type : ${errName}`,
+          `\n  Message : ${errMessage}`,
+          `\n  Taille des données : ${data.length} bytes`,
+          `\n  Worker URL : ${GlobalWorkerOptions.workerSrc}`,
+          reason,
+        );
+        // Message utilisateur adapté au type d'erreur
+        if (errName === 'PasswordException') {
+          setError('Ce PDF est protégé par un mot de passe.');
+        } else if (errName === 'InvalidPDFException') {
+          setError(
+            'Ce PDF est endommagé ou incomplet. ' +
+            'Essayez de le télécharger et de l\'ouvrir localement.',
+          );
+        } else {
+          setError(
+            'Ce PDF ne peut pas être affiché. ' +
+            'Vérifiez la console (F12) pour plus de détails.',
+          );
+        }
         setLoading(false);
-      });
+      }
+    })();
 
     return () => {
       active = false;
       documentRef.current = null;
-      void task.destroy().catch(() => {});
+      void task?.destroy().catch(() => {});
     };
-  }, [source]);
+  }, [data, title]);
 
+  // Mesure de la largeur du conteneur pour adapter le rendu
   useEffect(() => {
     const element = viewportRef.current;
     if (!element) return;
@@ -80,6 +174,7 @@ export default function PdfViewer({
     return () => observer.disconnect();
   }, []);
 
+  // Rendu de la page courante sur le canvas
   useEffect(() => {
     if (!pdf || !viewportWidth || !canvasRef.current) return;
     let cancelled = false;
@@ -124,6 +219,7 @@ export default function PdfViewer({
         if (cancelled) return;
         if (reason instanceof Error && reason.name === 'RenderingCancelledException')
           return;
+        console.error('[PdfViewer] Erreur de rendu :', reason);
         setError('Impossible de préparer cette page du PDF.');
         setRendering(false);
       }
